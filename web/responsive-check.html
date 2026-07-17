@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Scope responsive verification</title>
+<style>
+*{box-sizing:border-box}html,body{margin:0;min-height:100%;background:#d9dcdb;font-family:-apple-system,BlinkMacSystemFont,sans-serif}
+body{padding:22px}.label{margin:0 0 10px;color:#27302c;font-size:14px;font-weight:700}
+.frame{overflow:hidden;background:white;box-shadow:0 16px 48px rgba(0,0,0,.22)}
+iframe{display:block;border:0;transform-origin:top left}
+</style>
+</head>
+<body>
+<p class="label" id="label"></p>
+<div class="frame" id="frame"><iframe id="app" src="./index.html?responsive-check=1" title="Scope app responsive verification"></iframe></div>
+<script>
+const q=new URLSearchParams(location.search);
+const w=Number(q.get("w")||393),h=Number(q.get("h")||852),s=Number(q.get("s")||1);
+label.textContent=`Scope viewport: ${w} x ${h}`;
+frame.style.width=`${w*s}px`; frame.style.height=`${h*s}px`;
+app.style.width=`${w}px`; app.style.height=`${h}px`; app.style.transform=`scale(${s})`;
+</script>
+</body>
+</html>
