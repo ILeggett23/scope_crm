@@ -14,24 +14,25 @@
   <div class="app-shell">
     <aside class="sidebar" aria-label="Primary navigation">
       <div class="brand">
-        <img src="assets/scope-icon.png" alt="" width="40" height="40">
+        <img src="assets/scope-icon.png" alt="" width="46" height="46">
         <div>
           <strong>Scope</strong>
-          <span>Your money, clearly</span>
+          <span>Personal + business</span>
         </div>
       </div>
       <nav class="side-nav">
-        <button class="nav-item is-active" data-view="dashboard"><span aria-hidden="true">◎</span>Scope</button>
-        <button class="nav-item" data-view="transactions"><span aria-hidden="true">≡</span>Transactions</button>
-        <button class="nav-item" data-view="budget"><span aria-hidden="true">◔</span>Budget</button>
-        <button class="nav-item" data-view="events"><span aria-hidden="true">□</span>Events</button>
-        <button class="nav-item" data-view="mileage"><span aria-hidden="true">↗</span>Mileage</button>
-        <button class="nav-item" data-view="reports"><span aria-hidden="true">▥</span>Reports</button>
-        <button class="nav-item" data-view="import"><span aria-hidden="true">⇧</span>Import</button>
-        <button class="nav-item" data-view="settings"><span aria-hidden="true">⚙</span>Settings</button>
+        <button class="nav-item is-active" data-view="dashboard" aria-current="page"><svg class="icon"><use href="assets/icons.svg#icon-scope"></use></svg><span>Scope</span></button>
+        <button class="nav-item" data-view="transactions"><svg class="icon"><use href="assets/icons.svg#icon-transactions"></use></svg><span>Transactions</span></button>
+        <button class="nav-item" data-view="budget"><svg class="icon"><use href="assets/icons.svg#icon-budget"></use></svg><span>Budget</span></button>
+        <button class="nav-item" data-view="events"><svg class="icon"><use href="assets/icons.svg#icon-events"></use></svg><span>Events</span></button>
+        <button class="nav-item" data-view="mileage"><svg class="icon"><use href="assets/icons.svg#icon-mileage"></use></svg><span>Mileage</span></button>
+        <button class="nav-item" data-view="reports"><svg class="icon"><use href="assets/icons.svg#icon-reports"></use></svg><span>Reports</span></button>
+        <div class="nav-divider" aria-hidden="true"></div>
+        <button class="nav-item" data-view="import"><svg class="icon"><use href="assets/icons.svg#icon-import"></use></svg><span>Import</span></button>
+        <button class="nav-item" data-view="settings"><svg class="icon"><use href="assets/icons.svg#icon-settings"></use></svg><span>Settings</span></button>
       </nav>
       <div class="privacy-note">
-        <span aria-hidden="true">◆</span>
+        <span class="privacy-icon"><svg class="icon"><use href="assets/icons.svg#icon-shield"></use></svg></span>
         <p><strong>Private by design</strong><br>Data stays in this browser.</p>
       </div>
     </aside>
@@ -43,19 +44,19 @@
           <h1 id="view-title">Scope</h1>
         </div>
         <div class="topbar-actions">
-          <button class="icon-button" id="assistant-button" aria-label="Open Scope Assistant" title="Scope Assistant">✦</button>
-          <button class="primary-button" id="quick-add-button"><span aria-hidden="true">＋</span><span>Add transaction</span></button>
+          <button class="icon-button assistant-button" id="assistant-button" aria-label="Open Scope Assistant" title="Scope Assistant"><svg class="icon"><use href="assets/icons.svg#icon-sparkles"></use></svg></button>
+          <button class="primary-button" id="quick-add-button"><svg class="icon"><use href="assets/icons.svg#icon-plus"></use></svg><span>Add transaction</span></button>
         </div>
       </header>
       <section id="app-content" class="content" aria-live="polite"></section>
     </main>
 
     <nav class="bottom-nav" aria-label="Mobile navigation">
-      <button class="mobile-nav-item is-active" data-view="dashboard"><span>◎</span>Scope</button>
-      <button class="mobile-nav-item" data-view="transactions"><span>≡</span>Transactions</button>
-      <button class="mobile-nav-item" data-view="budget"><span>◔</span>Budget</button>
-      <button class="mobile-nav-item" data-view="events"><span>□</span>Events</button>
-      <button class="mobile-nav-item" data-view="settings"><span>•••</span>More</button>
+      <button class="mobile-nav-item is-active" data-view="dashboard" aria-current="page"><svg class="icon"><use href="assets/icons.svg#icon-scope"></use></svg><span>Scope</span></button>
+      <button class="mobile-nav-item" data-view="transactions"><svg class="icon"><use href="assets/icons.svg#icon-transactions"></use></svg><span>Transactions</span></button>
+      <button class="mobile-nav-item" data-view="budget"><svg class="icon"><use href="assets/icons.svg#icon-budget"></use></svg><span>Budget</span></button>
+      <button class="mobile-nav-item" data-view="events"><svg class="icon"><use href="assets/icons.svg#icon-events"></use></svg><span>Events</span></button>
+      <button class="mobile-nav-item" data-view="settings"><svg class="icon"><use href="assets/icons.svg#icon-more"></use></svg><span>More</span></button>
     </nav>
   </div>
 
@@ -68,25 +69,24 @@
         <p class="eyebrow">Local budgeting guidance</p>
         <h2>Scope Assistant</h2>
       </div>
-      <button class="icon-button" id="close-assistant" aria-label="Close assistant">×</button>
+      <button class="icon-button" id="close-assistant" aria-label="Close assistant"><svg class="icon"><use href="assets/icons.svg#icon-x"></use></svg></button>
     </header>
     <div id="assistant-messages" class="assistant-messages"></div>
     <div id="assistant-suggestions" class="suggestions"></div>
     <form id="assistant-form" class="assistant-input">
       <label class="sr-only" for="assistant-question">Ask about your money</label>
       <input id="assistant-question" autocomplete="off" placeholder="Can I spend $80 on dinner?">
-      <button class="primary-button" type="submit" aria-label="Send question">Send</button>
+      <button class="primary-button send-button" type="submit" aria-label="Send question"><svg class="icon"><use href="assets/icons.svg#icon-send"></use></svg></button>
     </form>
     <p class="assistant-disclaimer">Budgeting support only, not professional financial advice.</p>
   </aside>
   <div id="drawer-backdrop" class="drawer-backdrop" hidden></div>
 
   <div id="image-viewer" class="image-viewer" hidden role="dialog" aria-modal="true" aria-label="Receipt preview">
-    <button id="close-image-viewer" class="viewer-close" aria-label="Close receipt preview">×</button>
+    <button id="close-image-viewer" class="viewer-close" aria-label="Close receipt preview"><svg class="icon"><use href="assets/icons.svg#icon-x"></use></svg></button>
     <img id="viewer-image" alt="Attached receipt">
   </div>
 
   <script type="module" src="src/app.js"></script>
 </body>
 </html>
-
