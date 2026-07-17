@@ -38,6 +38,10 @@ let currentCSVPreview = null;
 let currentBackupPreview = null;
 let objectURLs = [];
 let toastTimer;
+let modalReturnFocus = null;
+let assistantReturnFocus = null;
+let imageViewerReturnFocus = null;
+let assistantBusy = false;
 
 const viewMeta = {
   dashboard: ["Scope", "Financial overview"],
@@ -49,6 +53,22 @@ const viewMeta = {
   import: ["Import", "Local financial documents"],
   settings: ["Settings", "Profile, categories, and backup"]
 };
+
+const legacyIconNames = {
+  "◎": "scope",
+  "≡": "transactions",
+  "◔": "budget",
+  "□": "events",
+  "↗": "route",
+  "▥": "reports",
+  "◇": "target",
+  "!": "alert-circle"
+};
+
+function icon(name, className = "") {
+  const iconName = legacyIconNames[name] || name;
+  return `<svg class="icon ${className}" aria-hidden="true"><use href="assets/icons.svg#icon-${iconName}"></use></svg>`;
+}
 
 function escapeHTML(value = "") {
   return String(value).replace(/[&<>"']/g, character => ({
@@ -73,6 +93,13 @@ function showToast(message) {
   toastTimer = setTimeout(() => toast.classList.remove("show"), 2800);
 }
 
+function syncOverlayState() {
+  const hasOverlay = Boolean(modalRoot.firstElementChild)
+    || assistantDrawer.classList.contains("is-open")
+    || !imageViewer.hidden;
+  document.body.classList.toggle("overlay-open", hasOverlay);
+}
+
 function revokeObjectURLs() {
   for (const url of objectURLs) URL.revokeObjectURL(url);
   objectURLs = [];
@@ -93,7 +120,7 @@ async function reload(render = true) {
 }
 
 function emptyState(symbol, heading, message, action = "") {
-  return `<div class="empty-state"><span class="empty-symbol" aria-hidden="true">${symbol}</span><strong>${escapeHTML(heading)}</strong><span>${escapeHTML(message)}</span>${action}</div>`;
+  return `<div class="empty-state"><span class="empty-symbol">${icon(symbol)}</span><strong>${escapeHTML(heading)}</strong><span>${escapeHTML(message)}</span>${action}</div>`;
 }
 
 function categoryName(id, fallback = "Uncategorized") {
@@ -116,7 +143,10 @@ function paymentOptions(selected = "") {
 function setView(view) {
   currentView = view;
   document.querySelectorAll("[data-view]").forEach(button => {
-    button.classList.toggle("is-active", button.dataset.view === view);
+    const isActive = button.dataset.view === view;
+    button.classList.toggle("is-active", isActive);
+    if (isActive) button.setAttribute("aria-current", "page");
+    else button.removeAttribute("aria-current");
   });
   const [heading, detail] = viewMeta[view] || viewMeta.dashboard;
   title.textContent = heading;
@@ -143,32 +173,55 @@ function renderView() {
 function renderDashboard() {
   const snapshot = calculateSnapshot(state);
   const budgetRows = snapshot.budgetRows.slice(0, 5);
+  const profile = state.settings.find(item => item.key === "profile") || {};
+  const personalSpend = snapshot.monthly.filter(item => item.type === "expense" && !item.isBusiness).reduce((sum, item) => sum + Number(item.amount || 0), 0);
+  const businessSpend = snapshot.monthly.filter(item => item.type === "expense" && item.isBusiness).reduce((sum, item) => sum + Number(item.amount || 0), 0);
   return `
+    <div class="dashboard-intro">
+      <p>Good ${new Date().getHours() < 12 ? "morning" : new Date().getHours() < 18 ? "afternoon" : "evening"}</p>
+      <h2>${escapeHTML(profile.businessName || "Scope")}</h2>
+      <span>Personal and business money, clearly organized.</span>
+    </div>
     <div class="dashboard-grid">
-      <article class="card span-3">
-        <p class="metric-label">Income this month</p>
-        <p class="metric-value positive">${money(snapshot.income)}</p>
-        <p class="metric-foot">${snapshot.monthly.filter(item => item.type === "income").length} deposits</p>
+      <article class="card hero-card span-8">
+        <div class="hero-heading">
+          <div>
+            <p class="metric-label">Net cash flow</p>
+            <p class="hero-value ${snapshot.net >= 0 ? "positive" : "negative"}">${money(snapshot.net)}</p>
+            <p class="metric-foot">This month</p>
+          </div>
+          <span class="hero-icon ${snapshot.net >= 0 ? "positive" : "caution"}">${icon(snapshot.net >= 0 ? "trending-up" : "alert-circle")}</span>
+        </div>
+        <div class="metric-pills">
+          <div class="metric-pill income"><span>Income</span><strong>${money(snapshot.income)}</strong></div>
+          <div class="metric-pill expense"><span>Expenses</span><strong>${money(snapshot.expenses)}</strong></div>
+        </div>
+        <div class="compact-metrics">
+          <div><span>Flexible after bills</span><strong>${money(snapshot.flexibleMoneyAfterBills)}</strong></div>
+          <div><span>Upcoming bills</span><strong>${money(snapshot.upcomingBillsTotal)}</strong></div>
+        </div>
       </article>
-      <article class="card span-3">
-        <p class="metric-label">Expenses this month</p>
-        <p class="metric-value">${money(snapshot.expenses)}</p>
-        <p class="metric-foot">${snapshot.monthly.filter(item => item.type === "expense").length} expenses</p>
+
+      <article class="card assistant-shortcut span-4">
+        <span class="section-icon assistant">${icon("sparkles")}</span>
+        <div><h2>Scope Assistant</h2><p>Ask about spending, budgets, bills, or a purchase.</p></div>
+        <button class="primary-button full-button" type="button" data-action="open-assistant">${icon("sparkles")} Ask Assistant</button>
       </article>
-      <article class="card span-3">
-        <p class="metric-label">Net cash flow</p>
-        <p class="metric-value ${snapshot.net >= 0 ? "positive" : "negative"}">${money(snapshot.net)}</p>
-        <p class="metric-foot">Income minus spending</p>
+
+      <article class="card span-6">
+        <div class="card-header compact"><div class="section-title"><span class="section-icon personal">${icon("home")}</span><div><h2>Personal</h2><p>Everyday spending this month</p></div></div></div>
+        <p class="metric-value">${money(personalSpend)}</p>
+        <p class="metric-foot">${snapshot.monthly.filter(item => item.type === "expense" && !item.isBusiness).length} personal expenses</p>
       </article>
-      <article class="card span-3">
-        <p class="metric-label">Flexible after bills</p>
-        <p class="metric-value">${money(snapshot.flexibleMoneyAfterBills)}</p>
-        <p class="metric-foot">${money(snapshot.upcomingBillsTotal)} in known upcoming bills</p>
+      <article class="card span-6">
+        <div class="card-header compact"><div class="section-title"><span class="section-icon business">${icon("briefcase")}</span><div><h2>Business</h2><p>Business spending this month</p></div></div></div>
+        <p class="metric-value">${money(businessSpend)}</p>
+        <p class="metric-foot">${snapshot.monthly.filter(item => item.type === "expense" && item.isBusiness).length} business expenses</p>
       </article>
 
       <article class="card span-7">
         <div class="card-header">
-          <div><h2>Budget progress</h2><p>Monthly category limits</p></div>
+          <div class="section-title"><span class="section-icon">${icon("budget")}</span><div><h2>Budget progress</h2><p>Monthly category limits</p></div></div>
           <button class="secondary-button" data-view-jump="budget">Manage</button>
         </div>
         ${budgetRows.length ? budgetRows.map(budget => {
@@ -181,7 +234,7 @@ function renderDashboard() {
       </article>
 
       <article class="card span-5">
-        <div class="card-header"><div><h2>Where money is going</h2><p>Top categories this month</p></div></div>
+        <div class="card-header"><div class="section-title"><span class="section-icon green">${icon("budget")}</span><div><h2>Where money is going</h2><p>Top categories this month</p></div></div></div>
         ${snapshot.topCategories.length ? snapshot.topCategories.slice(0, 5).map(category => `
           <div class="list-row">
             <div class="row-main"><p class="row-title">${escapeHTML(category.name)}</p><p class="row-meta">${snapshot.expenses ? Math.round(category.amount / snapshot.expenses * 100) : 0}% of spending</p></div>
@@ -190,12 +243,12 @@ function renderDashboard() {
       </article>
 
       <article class="card span-7">
-        <div class="card-header"><div><h2>Recent transactions</h2><p>Latest active activity</p></div><button class="secondary-button" data-view-jump="transactions">View all</button></div>
+        <div class="card-header"><div class="section-title"><span class="section-icon">${icon("transactions")}</span><div><h2>Recent transactions</h2><p>Latest active activity</p></div></div><button class="secondary-button" data-view-jump="transactions">View all</button></div>
         ${snapshot.recentTransactions.length ? snapshot.recentTransactions.map(transaction => transactionRow(transaction)).join("") : emptyState("≡", "Nothing logged yet", "Add income or an expense to begin.")}
       </article>
 
       <article class="card span-5">
-        <div class="card-header"><div><h2>Upcoming</h2><p>Bills and planned costs</p></div><button class="secondary-button" data-view-jump="events">Manage</button></div>
+        <div class="card-header"><div class="section-title"><span class="section-icon orange">${icon("calendar")}</span><div><h2>Upcoming</h2><p>Bills and planned costs</p></div></div><button class="secondary-button" data-view-jump="events">Manage</button></div>
         ${snapshot.upcomingBills.length ? snapshot.upcomingBills.slice(0, 5).map(bill => `
           <div class="list-row"><div class="row-main"><p class="row-title">${escapeHTML(bill.name)}</p><p class="row-meta">${formatDate(bill.dueDate)}</p></div><span class="row-amount">${money(bill.amount)}</span></div>
         `).join("") : emptyState("□", "No upcoming bills", "Add recurring costs in Events.")}
@@ -227,7 +280,7 @@ function renderTransactions() {
           <option value="all">Personal + business</option><option value="personal">Personal</option><option value="business">Business</option>
         </select>
       </div>
-      <button class="primary-button" data-action="add-transaction">＋ Add transaction</button>
+      <button class="primary-button" data-action="add-transaction">${icon("plus")} Add transaction</button>
     </div>
     <div id="transaction-results">
       ${renderTransactionTable(transactions)}
@@ -244,13 +297,13 @@ function renderTransactionTable(transactions) {
       const image = receipt ? receiptURL(receipt.id) : null;
       const missing = transaction.isTaxDeductible && !image;
       return `<tr>
-        <td>${formatDate(transaction.date, { month: "short", day: "numeric" })}</td>
-        <td><strong>${escapeHTML(transaction.merchant)}</strong><br><span class="row-meta">${escapeHTML(transaction.paymentMethodName || "Unassigned")}</span></td>
-        <td>${escapeHTML(categoryName(transaction.categoryID, transaction.categoryNameSnapshot))}</td>
-        <td><span class="badge">${transaction.isBusiness ? "Business" : "Personal"}</span></td>
-        <td>${image ? `<img class="receipt-thumb" src="${image}" alt="Receipt for ${escapeHTML(transaction.merchant)}" data-receipt-url="${image}">` : `<span class="badge ${missing ? "warning" : ""}">${missing ? "Missing proof" : "No receipt"}</span>`}</td>
-        <td class="text-right"><strong>${transaction.type === "income" ? "+" : "−"}${money(transaction.amount)}</strong></td>
-        <td><div class="row-actions"><button class="icon-button" data-edit-transaction="${transaction.id}" aria-label="Edit ${escapeHTML(transaction.merchant)}">✎</button><button class="icon-button" data-delete-transaction="${transaction.id}" aria-label="Delete ${escapeHTML(transaction.merchant)}">×</button></div></td>
+        <td data-label="Date">${formatDate(transaction.date, { month: "short", day: "numeric" })}</td>
+        <td data-label="Merchant"><strong>${escapeHTML(transaction.merchant)}</strong><br><span class="row-meta">${escapeHTML(transaction.paymentMethodName || "Unassigned")}</span></td>
+        <td data-label="Category">${escapeHTML(categoryName(transaction.categoryID, transaction.categoryNameSnapshot))}</td>
+        <td data-label="Scope"><span class="badge">${transaction.isBusiness ? "Business" : "Personal"}</span></td>
+        <td data-label="Receipt">${image ? `<img class="receipt-thumb" src="${image}" alt="Receipt for ${escapeHTML(transaction.merchant)}" data-receipt-url="${image}" role="button" tabindex="0">` : `<span class="badge ${missing ? "warning" : ""}">${missing ? "Missing proof" : "No receipt"}</span>`}</td>
+        <td data-label="Amount" class="text-right"><strong class="${transaction.type === "income" ? "positive" : ""}">${transaction.type === "income" ? "+" : "−"}${money(transaction.amount)}</strong></td>
+        <td class="table-actions"><div class="row-actions"><button class="icon-button" data-edit-transaction="${transaction.id}" aria-label="Edit ${escapeHTML(transaction.merchant)}">${icon("pencil")}</button><button class="icon-button danger-icon" data-delete-transaction="${transaction.id}" aria-label="Delete ${escapeHTML(transaction.merchant)}">${icon("trash")}</button></div></td>
       </tr>`;
     }).join("")}</tbody>
   </table></div>`;
@@ -262,13 +315,13 @@ function renderBudget() {
   return `<div class="page-stack">
     <div class="section-toolbar">
       <div><h2>Monthly budgets</h2><p class="row-meta">${money(snapshot.expenses)} spent · ${money(snapshot.remainingBudget)} remaining</p></div>
-      <button class="primary-button" data-action="add-budget">＋ Add budget</button>
+      <button class="primary-button" data-action="add-budget">${icon("plus")} Add budget</button>
     </div>
     <div class="dashboard-grid">
       ${rows.length ? rows.map(budget => {
         const percent = Math.round(budget.percent * 100);
         return `<article class="card span-4">
-          <div class="card-header"><div><h3>${escapeHTML(budget.categoryName)}</h3><p>${percent}% used</p></div><button class="icon-button" data-edit-budget="${budget.id}" aria-label="Edit ${escapeHTML(budget.categoryName)} budget">✎</button></div>
+          <div class="card-header"><div><h3>${escapeHTML(budget.categoryName)}</h3><p>${percent}% used</p></div><button class="icon-button" data-edit-budget="${budget.id}" aria-label="Edit ${escapeHTML(budget.categoryName)} budget">${icon("pencil")}</button></div>
           <p class="metric-value">${money(budget.remaining)}</p><p class="metric-foot">remaining of ${money(budget.monthlyAmount)}</p>
           <div class="progress-row"><div class="progress-track"><div class="progress-fill ${percent > 100 ? "over" : percent >= 80 ? "warning" : ""}" style="width:${Math.min(100, Math.max(0, percent))}%"></div></div></div>
           <span class="badge ${percent > 100 ? "danger" : percent >= 80 ? "warning" : "good"}">${percent > 100 ? "Over budget" : percent >= 80 ? "Near limit" : "On track"}</span>
@@ -281,10 +334,10 @@ function renderBudget() {
 function renderEvents() {
   const events = [...state.events].sort((a, b) => new Date(a.nextDate) - new Date(b.nextDate));
   return `<div class="page-stack">
-    <div class="section-toolbar"><div><h2>Events and bills</h2><p class="row-meta">One-time and recurring costs</p></div><button class="primary-button" data-action="add-event">＋ Add event</button></div>
+    <div class="section-toolbar"><div><h2>Events and bills</h2><p class="row-meta">One-time and recurring costs</p></div><button class="primary-button" data-action="add-event">${icon("plus")} Add event</button></div>
     ${events.length ? `<div class="dashboard-grid">${events.map(event => `
       <article class="card span-4">
-        <div class="card-header"><div><h3>${escapeHTML(event.name)}</h3><p>${escapeHTML(recurrenceTitle(event.recurrence))}</p></div><button class="icon-button" data-edit-event="${event.id}" aria-label="Edit ${escapeHTML(event.name)}">✎</button></div>
+        <div class="card-header"><div><h3>${escapeHTML(event.name)}</h3><p>${escapeHTML(recurrenceTitle(event.recurrence))}</p></div><button class="icon-button" data-edit-event="${event.id}" aria-label="Edit ${escapeHTML(event.name)}">${icon("pencil")}</button></div>
         <p class="row-meta">${formatDate(event.nextDate)}${event.location ? ` · ${escapeHTML(event.location)}` : ""}</p>
         <p class="metric-value">${money(event.estimatedCost)}</p>
         <p class="metric-foot">${event.estimatedMileage ? `${event.estimatedMileage} estimated miles · ` : ""}${escapeHTML(categoryName(event.categoryID))}</p>
@@ -307,9 +360,9 @@ function renderMileage() {
       <article class="card span-4"><p class="metric-label">Mileage rate</p><p class="metric-value">${money(profile.defaultMileageRate || 0.7)}</p><p class="metric-foot">per business mile</p></article>
       <article class="card span-4"><p class="metric-label">Deduction estimate</p><p class="metric-value positive">${money(miles * Number(profile.defaultMileageRate || 0.7))}</p><p class="metric-foot">For record organization only</p></article>
     </div>
-    <div class="section-toolbar"><div><h2>Trips</h2></div><button class="primary-button" data-action="add-mileage">＋ Add trip</button></div>
+    <div class="section-toolbar"><div><h2>Trips</h2></div><button class="primary-button" data-action="add-mileage">${icon("plus")} Add trip</button></div>
     ${trips.length ? `<div class="data-table-wrap"><table class="data-table"><thead><tr><th>Date</th><th>Route</th><th>Purpose</th><th class="text-right">Miles</th><th></th></tr></thead><tbody>
-      ${trips.map(trip => `<tr><td>${formatDate(trip.date)}</td><td><strong>${escapeHTML(trip.startLocation)}</strong> → ${escapeHTML(trip.endLocation)}</td><td>${escapeHTML(trip.purpose)}</td><td class="text-right"><strong>${Number(trip.miles).toFixed(1)}</strong></td><td><button class="icon-button" data-delete-mileage="${trip.id}" aria-label="Delete trip">×</button></td></tr>`).join("")}
+      ${trips.map(trip => `<tr><td data-label="Date">${formatDate(trip.date)}</td><td data-label="Route"><strong>${escapeHTML(trip.startLocation)}</strong><span class="route-arrow">${icon("chevron-right")}</span>${escapeHTML(trip.endLocation)}</td><td data-label="Purpose">${escapeHTML(trip.purpose)}</td><td data-label="Miles" class="text-right"><strong>${Number(trip.miles).toFixed(1)}</strong></td><td class="table-actions"><button class="icon-button danger-icon" data-delete-mileage="${trip.id}" aria-label="Delete trip">${icon("trash")}</button></td></tr>`).join("")}
     </tbody></table></div>` : emptyState("↗", "No mileage logged", "Add a business trip to estimate mileage deductions.")}
   </div>`;
 }
@@ -414,12 +467,12 @@ function renderSettings() {
       <p class="row-meta" style="margin-top:12px">Includes soft-deleted history, relationships, and locally stored receipt files.</p>
     </article>
     <article class="card span-7">
-      <div class="card-header"><div><h2>Categories</h2><p>Personal and business organization</p></div><button class="secondary-button" data-action="add-category">＋ Add</button></div>
-      <div class="list">${state.categories.map(category => `<div class="list-row"><div class="row-main"><p class="row-title">${escapeHTML(category.name)}</p><p class="row-meta">${category.isIncomeCategory ? "Income" : "Expense"} category</p></div><button class="icon-button" data-delete-category="${category.id}" aria-label="Delete ${escapeHTML(category.name)}">×</button></div>`).join("")}</div>
+      <div class="card-header"><div><h2>Categories</h2><p>Personal and business organization</p></div><button class="secondary-button" data-action="add-category">${icon("plus")} Add</button></div>
+      <div class="list">${state.categories.map(category => `<div class="list-row"><div class="row-main"><p class="row-title">${escapeHTML(category.name)}</p><p class="row-meta">${category.isIncomeCategory ? "Income" : "Expense"} category</p></div><button class="icon-button danger-icon" data-delete-category="${category.id}" aria-label="Delete ${escapeHTML(category.name)}">${icon("trash")}</button></div>`).join("")}</div>
     </article>
     <article class="card span-5">
-      <div class="card-header"><div><h2>Savings goals</h2><p>Included in assistant calculations</p></div><button class="secondary-button" data-action="add-goal">＋ Add</button></div>
-      ${state.savingsGoals.length ? state.savingsGoals.map(goal => `<div class="list-row"><div class="row-main"><p class="row-title">${escapeHTML(goal.name)}</p><p class="row-meta">${money(goal.savedAmount)} saved of ${money(goal.targetAmount)}</p></div><button class="icon-button" data-delete-goal="${goal.id}" aria-label="Delete goal">×</button></div>`).join("") : emptyState("◇", "No savings goals", "Add a target for better affordability guidance.")}
+      <div class="card-header"><div><h2>Savings goals</h2><p>Included in assistant calculations</p></div><button class="secondary-button" data-action="add-goal">${icon("plus")} Add</button></div>
+      ${state.savingsGoals.length ? state.savingsGoals.map(goal => `<div class="list-row"><div class="row-main"><p class="row-title">${escapeHTML(goal.name)}</p><p class="row-meta">${money(goal.savedAmount)} saved of ${money(goal.targetAmount)}</p></div><button class="icon-button danger-icon" data-delete-goal="${goal.id}" aria-label="Delete goal">${icon("trash")}</button></div>`).join("") : emptyState("◇", "No savings goals", "Add a target for better affordability guidance.")}
     </article>
     <div class="span-12 callout">Scope stores web data in IndexedDB on this device. Clearing browser site data removes it, so create portable backups regularly.</div>
   </div>`;
@@ -431,7 +484,7 @@ function bindViewEvents() {
 
   content.querySelectorAll("[data-edit-transaction]").forEach(button => button.addEventListener("click", () => openTransactionModal(state.transactions.find(item => item.id === button.dataset.editTransaction))));
   content.querySelectorAll("[data-delete-transaction]").forEach(button => button.addEventListener("click", () => softDeleteTransaction(button.dataset.deleteTransaction)));
-  content.querySelectorAll("[data-receipt-url]").forEach(image => image.addEventListener("click", () => openImageViewer(image.dataset.receiptUrl, image.alt)));
+  bindReceiptPreviewEvents();
   content.querySelectorAll("[data-edit-budget]").forEach(button => button.addEventListener("click", () => openBudgetModal(state.budgets.find(item => item.id === button.dataset.editBudget))));
   content.querySelectorAll("[data-edit-event]").forEach(button => button.addEventListener("click", () => openEventModal(state.events.find(item => item.id === button.dataset.editEvent))));
   content.querySelectorAll("[data-delete-mileage]").forEach(button => button.addEventListener("click", async () => { await deleteRecord(db, "mileageTrips", button.dataset.deleteMileage); await reload(); showToast("Trip deleted."); }));
@@ -463,10 +516,23 @@ function bindViewEvents() {
 function bindTransactionResultEvents() {
   content.querySelectorAll("[data-edit-transaction]").forEach(button => button.addEventListener("click", () => openTransactionModal(state.transactions.find(item => item.id === button.dataset.editTransaction))));
   content.querySelectorAll("[data-delete-transaction]").forEach(button => button.addEventListener("click", () => softDeleteTransaction(button.dataset.deleteTransaction)));
-  content.querySelectorAll("[data-receipt-url]").forEach(image => image.addEventListener("click", () => openImageViewer(image.dataset.receiptUrl, image.alt)));
+  bindReceiptPreviewEvents();
+}
+
+function bindReceiptPreviewEvents() {
+  content.querySelectorAll("[data-receipt-url]").forEach(image => {
+    image.addEventListener("click", () => openImageViewer(image.dataset.receiptUrl, image.alt));
+    image.addEventListener("keydown", event => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        openImageViewer(image.dataset.receiptUrl, image.alt);
+      }
+    });
+  });
 }
 
 function handleAction(action) {
+  if (action === "open-assistant") openAssistant();
   if (action === "add-transaction") openTransactionModal();
   if (action === "add-budget") openBudgetModal();
   if (action === "add-event") openEventModal();
@@ -480,8 +546,9 @@ function handleAction(action) {
 }
 
 function openModal({ heading, body, submitLabel = "Save", onSubmit, dangerAction = null, wide = false }) {
+  modalReturnFocus = document.activeElement;
   modalRoot.innerHTML = `<div class="modal-backdrop" role="presentation"><section class="modal ${wide ? "wide" : ""}" role="dialog" aria-modal="true" aria-labelledby="modal-title">
-    <header class="modal-header"><h2 id="modal-title">${escapeHTML(heading)}</h2><button class="icon-button" type="button" data-close-modal aria-label="Close">×</button></header>
+    <header class="modal-header"><h2 id="modal-title">${escapeHTML(heading)}</h2><button class="icon-button" type="button" data-close-modal aria-label="Close">${icon("x")}</button></header>
     <form id="modal-form">
       <div class="modal-body">${body}</div>
       <footer class="modal-footer">${dangerAction ? '<button class="danger-button" type="button" id="modal-danger">Delete</button>' : ""}<button class="secondary-button" type="button" data-close-modal>Cancel</button><button class="primary-button" type="submit">${escapeHTML(submitLabel)}</button></footer>
@@ -502,11 +569,15 @@ function openModal({ heading, body, submitLabel = "Save", onSubmit, dangerAction
     }
   });
   if (dangerAction) modalRoot.querySelector("#modal-danger").addEventListener("click", dangerAction);
+  syncOverlayState();
   setTimeout(() => modalRoot.querySelector("input, select, textarea")?.focus(), 30);
 }
 
 function closeModal() {
   modalRoot.innerHTML = "";
+  syncOverlayState();
+  if (modalReturnFocus?.isConnected) modalReturnFocus.focus();
+  modalReturnFocus = null;
 }
 
 function openTransactionModal(transaction = null) {
@@ -843,16 +914,23 @@ async function exportBackup(filename = null, notify = true) {
 }
 
 function openAssistant() {
+  assistantReturnFocus = document.activeElement;
   assistantDrawer.classList.add("is-open");
   assistantDrawer.setAttribute("aria-hidden", "false");
   drawerBackdrop.hidden = false;
+  syncOverlayState();
   document.querySelector("#assistant-question").focus();
 }
 
 function closeAssistant() {
   assistantDrawer.classList.remove("is-open");
+  assistantDrawer.classList.remove("is-dragging");
+  assistantDrawer.style.removeProperty("--drawer-drag");
   assistantDrawer.setAttribute("aria-hidden", "true");
   drawerBackdrop.hidden = true;
+  syncOverlayState();
+  if (assistantReturnFocus?.isConnected) assistantReturnFocus.focus();
+  assistantReturnFocus = null;
 }
 
 function addAssistantMessage(text, role) {
@@ -861,19 +939,41 @@ function addAssistantMessage(text, role) {
   message.textContent = text;
   assistantMessages.append(message);
   assistantMessages.scrollTop = assistantMessages.scrollHeight;
+  return message;
+}
+
+function submitAssistantQuestion(question) {
+  const cleanQuestion = question.trim();
+  if (!cleanQuestion || assistantBusy) return;
+  assistantBusy = true;
+  addAssistantMessage(cleanQuestion, "user");
+  const typing = addAssistantMessage("Thinking with your latest Scope data...", "assistant typing");
+  const sendButton = document.querySelector("#assistant-form button[type='submit']");
+  if (sendButton) sendButton.disabled = true;
+  window.setTimeout(() => {
+    typing.remove();
+    addAssistantMessage(assistantAnswer(cleanQuestion, state), "assistant");
+    assistantBusy = false;
+    if (sendButton) sendButton.disabled = false;
+  }, 140);
 }
 
 function openImageViewer(url, alt) {
+  imageViewerReturnFocus = document.activeElement;
   viewerImage.src = url;
   viewerImage.alt = alt || "Attached receipt";
   viewerImage.style.transform = "scale(1)";
   imageViewer.hidden = false;
+  syncOverlayState();
   document.querySelector("#close-image-viewer").focus();
 }
 
 function closeImageViewer() {
   imageViewer.hidden = true;
   viewerImage.src = "";
+  syncOverlayState();
+  if (imageViewerReturnFocus?.isConnected) imageViewerReturnFocus.focus();
+  imageViewerReturnFocus = null;
 }
 
 document.querySelectorAll("[data-view]").forEach(button => button.addEventListener("click", () => setView(button.dataset.view)));
@@ -881,21 +981,44 @@ document.querySelector("#quick-add-button").addEventListener("click", () => open
 document.querySelector("#assistant-button").addEventListener("click", openAssistant);
 document.querySelector("#close-assistant").addEventListener("click", closeAssistant);
 drawerBackdrop.addEventListener("click", closeAssistant);
+const assistantHeader = assistantDrawer.querySelector("header");
+let assistantDragStart = null;
+assistantHeader.addEventListener("pointerdown", event => {
+  if (window.innerWidth > 720 || event.target.closest("button")) return;
+  assistantDragStart = event.clientY;
+  assistantHeader.setPointerCapture(event.pointerId);
+  assistantDrawer.classList.add("is-dragging");
+});
+assistantHeader.addEventListener("pointermove", event => {
+  if (assistantDragStart == null) return;
+  const distance = Math.max(0, event.clientY - assistantDragStart);
+  assistantDrawer.style.setProperty("--drawer-drag", `${distance}px`);
+});
+assistantHeader.addEventListener("pointerup", event => {
+  if (assistantDragStart == null) return;
+  const distance = Math.max(0, event.clientY - assistantDragStart);
+  assistantDragStart = null;
+  assistantDrawer.classList.remove("is-dragging");
+  if (distance > 88) closeAssistant();
+  else assistantDrawer.style.removeProperty("--drawer-drag");
+});
+assistantHeader.addEventListener("pointercancel", () => {
+  assistantDragStart = null;
+  assistantDrawer.classList.remove("is-dragging");
+  assistantDrawer.style.removeProperty("--drawer-drag");
+});
 document.querySelector("#assistant-form").addEventListener("submit", event => {
   event.preventDefault();
   const input = document.querySelector("#assistant-question");
   const question = input.value.trim();
   if (!question) return;
-  addAssistantMessage(question, "user");
   input.value = "";
-  setTimeout(() => addAssistantMessage(assistantAnswer(question, state), "assistant"), 120);
+  submitAssistantQuestion(question);
 });
 const prompts = ["How am I doing this month?", "Can I spend $80 on dinner?", "What bills are coming up?", "Where can I cut back?"];
 assistantSuggestions.innerHTML = prompts.map(prompt => `<button class="suggestion" type="button">${escapeHTML(prompt)}</button>`).join("");
 assistantSuggestions.querySelectorAll("button").forEach((button, index) => button.addEventListener("click", () => {
-  const prompt = prompts[index];
-  addAssistantMessage(prompt, "user");
-  setTimeout(() => addAssistantMessage(assistantAnswer(prompt, state), "assistant"), 120);
+  submitAssistantQuestion(prompts[index]);
 }));
 addAssistantMessage("Ask about spending, budgets, bills, business expenses, or whether a purchase fits your plan. I calculate from the data stored in Scope.", "assistant");
 
@@ -923,4 +1046,3 @@ try {
 } catch (error) {
   content.innerHTML = emptyState("!", "Scope could not open local storage", error.message);
 }
-
