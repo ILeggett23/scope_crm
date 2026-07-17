@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0d8a55">
+  <meta name="description" content="Scope personal and business financial visibility">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="assets/scope-icon.png">
+  <link rel="stylesheet" href="styles.css">
+  <title>Scope</title>
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="Primary navigation">
+      <div class="brand">
+        <img src="assets/scope-icon.png" alt="" width="40" height="40">
+        <div>
+          <strong>Scope</strong>
+          <span>Your money, clearly</span>
+        </div>
+      </div>
+      <nav class="side-nav">
+        <button class="nav-item is-active" data-view="dashboard"><span aria-hidden="true">◎</span>Scope</button>
+        <button class="nav-item" data-view="transactions"><span aria-hidden="true">≡</span>Transactions</button>
+        <button class="nav-item" data-view="budget"><span aria-hidden="true">◔</span>Budget</button>
+        <button class="nav-item" data-view="events"><span aria-hidden="true">□</span>Events</button>
+        <button class="nav-item" data-view="mileage"><span aria-hidden="true">↗</span>Mileage</button>
+        <button class="nav-item" data-view="reports"><span aria-hidden="true">▥</span>Reports</button>
+        <button class="nav-item" data-view="import"><span aria-hidden="true">⇧</span>Import</button>
+        <button class="nav-item" data-view="settings"><span aria-hidden="true">⚙</span>Settings</button>
+      </nav>
+      <div class="privacy-note">
+        <span aria-hidden="true">◆</span>
+        <p><strong>Private by design</strong><br>Data stays in this browser.</p>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow" id="view-eyebrow">Financial overview</p>
+          <h1 id="view-title">Scope</h1>
+        </div>
+        <div class="topbar-actions">
+          <button class="icon-button" id="assistant-button" aria-label="Open Scope Assistant" title="Scope Assistant">✦</button>
+          <button class="primary-button" id="quick-add-button"><span aria-hidden="true">＋</span><span>Add transaction</span></button>
+        </div>
+      </header>
+      <section id="app-content" class="content" aria-live="polite"></section>
+    </main>
+
+    <nav class="bottom-nav" aria-label="Mobile navigation">
+      <button class="mobile-nav-item is-active" data-view="dashboard"><span>◎</span>Scope</button>
+      <button class="mobile-nav-item" data-view="transactions"><span>≡</span>Transactions</button>
+      <button class="mobile-nav-item" data-view="budget"><span>◔</span>Budget</button>
+      <button class="mobile-nav-item" data-view="events"><span>□</span>Events</button>
+      <button class="mobile-nav-item" data-view="settings"><span>•••</span>More</button>
+    </nav>
+  </div>
+
+  <div id="modal-root"></div>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <aside id="assistant-drawer" class="assistant-drawer" aria-label="Scope Assistant" aria-hidden="true">
+    <header>
+      <div>
+        <p class="eyebrow">Local budgeting guidance</p>
+        <h2>Scope Assistant</h2>
+      </div>
+      <button class="icon-button" id="close-assistant" aria-label="Close assistant">×</button>
+    </header>
+    <div id="assistant-messages" class="assistant-messages"></div>
+    <div id="assistant-suggestions" class="suggestions"></div>
+    <form id="assistant-form" class="assistant-input">
+      <label class="sr-only" for="assistant-question">Ask about your money</label>
+      <input id="assistant-question" autocomplete="off" placeholder="Can I spend $80 on dinner?">
+      <button class="primary-button" type="submit" aria-label="Send question">Send</button>
+    </form>
+    <p class="assistant-disclaimer">Budgeting support only, not professional financial advice.</p>
+  </aside>
+  <div id="drawer-backdrop" class="drawer-backdrop" hidden></div>
+
+  <div id="image-viewer" class="image-viewer" hidden role="dialog" aria-modal="true" aria-label="Receipt preview">
+    <button id="close-image-viewer" class="viewer-close" aria-label="Close receipt preview">×</button>
+    <img id="viewer-image" alt="Attached receipt">
+  </div>
+
+  <script type="module" src="src/app.js"></script>
+</body>
+</html>
+

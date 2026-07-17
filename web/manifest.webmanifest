@@ -1,0 +1,18 @@
+{
+  "name": "Scope",
+  "short_name": "Scope",
+  "description": "Private financial visibility for personal and business money.",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#f6f8f7",
+  "theme_color": "#0d8a55",
+  "icons": [
+    {
+      "src": "assets/scope-icon.png",
+      "sizes": "1024x1024",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
+
