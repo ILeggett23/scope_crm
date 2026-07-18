@@ -177,13 +177,19 @@ test("streaming portable backup output remains a valid Scope ZIP", async () => {
     "accounts", "receipts", "recurringExpenses", "savingsGoals"
   ].map(name => [name, []]));
   state.transactions = [transaction];
-  state.receipts = [{ ...manifest().receipts[0], blob: receiptBlob }];
+  state.receipts = [{ ...manifest().receipts[0], storageKey: "device-only-key" }];
   state.settings = [{ key: "profile", ...manifest().settings }];
 
-  const backupBlob = await createPortableBackupBlob(state, "test", { yieldControl: async () => {} });
+  let receiptLoads = 0;
+  const backupBlob = await createPortableBackupBlob(state, "test", {
+    yieldControl: async () => {},
+    loadReceiptBlob: async () => { receiptLoads += 1; return receiptBlob; }
+  });
   const preview = await previewArchiveFile(backupBlob, {});
   assert.equal(preview.manifest.transactions.length, 1);
   assert.equal(preview.entries.get(transaction.receiptImagePath).size, 4);
+  assert.equal(receiptLoads, 1);
+  assert.equal("storageKey" in preview.manifest.receipts[0], false);
 });
 
 test("portable backup parsing can be cancelled when the user leaves Import", async () => {
