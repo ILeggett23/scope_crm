@@ -127,6 +127,10 @@ test("backup parsing stays cancellable and cannot strand navigation", async () =
   assert.match(db, /getAllKeys\(db, "receipts"\)/);
   assert.match(db, /for \(const file of receiptFiles\)/);
   assert.match(backup, /delete copy\.storageKey/);
+  const appDatabaseVersion = app.match(/\.\/db\.js\?v=([0-9-]+)/)?.[1];
+  const backupDatabaseVersion = backup.match(/\.\/db\.js\?v=([0-9-]+)/)?.[1];
+  assert.ok(appDatabaseVersion, "app database import must be cache-versioned");
+  assert.equal(backupDatabaseVersion, appDatabaseVersion, "app and backup must load the same database module version");
 });
 
 test("assistant UI and response code are fully removed", async () => {
