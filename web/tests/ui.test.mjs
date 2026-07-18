@@ -101,6 +101,18 @@ test("mobile transaction sheet and safe areas stay unobstructed", async () => {
   assert.doesNotMatch(css, /\.modal-footer\s*\{[^}]*position:\s*sticky/s);
 });
 
+test("backup parsing stays cancellable and cannot strand navigation", async () => {
+  const app = await readFile(new URL("../src/app.js", import.meta.url), "utf8");
+
+  assert.match(app, /previewArchiveAsync/);
+  assert.match(app, /let backupReadGeneration = 0/);
+  assert.match(app, /currentView === "import" && view !== "import"/);
+  assert.match(app, /currentBackupPreview = null/);
+  assert.match(app, /shouldCancel:\s*\(\) => readGeneration !== backupReadGeneration \|\| currentView !== "import"/);
+  assert.match(app, /error\?\.name === "AbortError"/);
+  assert.match(app, /This section could not display one of its restored records/);
+});
+
 test("assistant UI and response code are fully removed", async () => {
   const [html, app, finance, css, icons] = await Promise.all([
     readFile(new URL("../index.html", import.meta.url), "utf8"),
