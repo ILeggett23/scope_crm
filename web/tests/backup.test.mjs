@@ -2,8 +2,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   encodeStoredZip,
+  createPortableBackupBlob,
   decodeStoredZip,
   previewArchiveAsync,
+  previewArchiveFile,
   previewArchive,
   buildImportPlan,
   validateManifest,
@@ -148,6 +150,40 @@ test("large portable backups yield while validating receipt bytes", async () => 
   assert.ok(yields > 1);
   assert.equal(preview.missingReceipts.length, 0);
   assert.equal(preview.entries.get(transaction.receiptImagePath).byteLength, receiptBytes.length);
+});
+
+test("file-backed backup preview keeps large receipts out of heap byte arrays", async () => {
+  const receiptBytes = new Uint8Array(2 * 1024 * 1024).fill(9);
+  const encoded = encodeStoredZip([
+    { path: "manifest.json", data: new TextEncoder().encode(JSON.stringify(manifest())) },
+    { path: transaction.receiptImagePath, data: receiptBytes }
+  ]);
+  let yields = 0;
+  const preview = await previewArchiveFile(new Blob([encoded]), {}, {
+    chunkSize: 64 * 1024,
+    yieldControl: async () => { yields += 1; }
+  });
+
+  const receiptEntry = preview.entries.get(transaction.receiptImagePath);
+  assert.ok(receiptEntry instanceof Blob);
+  assert.equal(receiptEntry.size, receiptBytes.length);
+  assert.ok(yields > 1);
+});
+
+test("streaming portable backup output remains a valid Scope ZIP", async () => {
+  const receiptBlob = new Blob([new Uint8Array([5, 6, 7, 8])], { type: "image/jpeg" });
+  const state = Object.fromEntries([
+    "transactions", "categories", "budgets", "events", "mileageTrips", "paymentMethods",
+    "accounts", "receipts", "recurringExpenses", "savingsGoals"
+  ].map(name => [name, []]));
+  state.transactions = [transaction];
+  state.receipts = [{ ...manifest().receipts[0], blob: receiptBlob }];
+  state.settings = [{ key: "profile", ...manifest().settings }];
+
+  const backupBlob = await createPortableBackupBlob(state, "test", { yieldControl: async () => {} });
+  const preview = await previewArchiveFile(backupBlob, {});
+  assert.equal(preview.manifest.transactions.length, 1);
+  assert.equal(preview.entries.get(transaction.receiptImagePath).size, 4);
 });
 
 test("portable backup parsing can be cancelled when the user leaves Import", async () => {
