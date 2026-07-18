@@ -5,14 +5,18 @@ import {
   putRecord,
   deleteRecord,
   applyImportPlan,
-  activeTransactions
+  activeTransactions,
+  getReceiptBlob,
+  saveReceiptAttachment,
+  deleteReceiptAttachment,
+  migrateReceiptStorage
 } from "./db.js";
 import { calculateSnapshot, money } from "./finance.js";
 import {
   createPortableBackupBlob,
   previewArchiveFile,
   restorePortableBackup
-} from "./backup.js?v=20260717-5";
+} from "./backup.js?v=20260717-6";
 import {
   parseFinancialCSV,
   sha256Hex,
@@ -38,6 +42,8 @@ let currentBackupPreview = null;
 let backupReadGeneration = 0;
 let restoreInProgress = false;
 let receiptURLCache = new Map();
+let receiptURLGeneration = 0;
+let receiptContentObserver = null;
 let toastTimer;
 let modalReturnFocus = null;
 let imageViewerReturnFocus = null;
@@ -132,18 +138,40 @@ function trapFocus(event, container) {
 }
 
 function revokeObjectURLs() {
-  for (const url of receiptURLCache.values()) URL.revokeObjectURL(url);
+  receiptURLGeneration += 1;
+  receiptContentObserver?.disconnect();
+  receiptContentObserver = null;
+  for (const url of receiptURLCache.values()) {
+    if (typeof url === "string") URL.revokeObjectURL(url);
+  }
   receiptURLCache.clear();
 }
 
-function receiptURL(receiptID) {
+async function receiptURL(receiptID) {
   const cachedURL = receiptURLCache.get(receiptID);
-  if (cachedURL) return cachedURL;
+  if (typeof cachedURL === "string") return cachedURL;
+  if (cachedURL instanceof Promise) return cachedURL;
   const receipt = (state.receipts || []).find(item => item.id === receiptID);
-  if (!receipt?.blob) return null;
-  const url = URL.createObjectURL(receipt.blob);
-  receiptURLCache.set(receiptID, url);
-  return url;
+  if (!receipt) return null;
+  const generation = receiptURLGeneration;
+  const pending = getReceiptBlob(db, receipt).then(blob => {
+    if (!blob) {
+      receiptURLCache.delete(receiptID);
+      return null;
+    }
+    const url = URL.createObjectURL(blob);
+    if (generation !== receiptURLGeneration) {
+      URL.revokeObjectURL(url);
+      return null;
+    }
+    receiptURLCache.set(receiptID, url);
+    return url;
+  }).catch(error => {
+    receiptURLCache.delete(receiptID);
+    throw error;
+  });
+  receiptURLCache.set(receiptID, pending);
+  return pending;
 }
 
 async function reload(render = true) {
@@ -200,6 +228,8 @@ function setView(view) {
 }
 
 function renderView() {
+  receiptContentObserver?.disconnect();
+  receiptContentObserver = null;
   const renderer = {
     dashboard: renderDashboard,
     transactions: renderTransactions,
@@ -340,14 +370,13 @@ function renderTransactionTable(transactions) {
     <thead><tr><th>Date</th><th>Merchant</th><th>Category</th><th>Scope</th><th>Receipt</th><th class="text-right">Amount</th><th></th></tr></thead>
     <tbody>${transactions.map(transaction => {
       const receipt = transaction.receiptID ? state.receipts.find(item => item.id === transaction.receiptID) : null;
-      const image = receipt ? receiptURL(receipt.id) : null;
-      const missing = transaction.isTaxDeductible && !image;
+      const missing = transaction.isTaxDeductible && !receipt;
       return `<tr>
         <td data-label="Date">${formatDate(transaction.date, { month: "short", day: "numeric" })}</td>
         <td data-label="Merchant"><strong>${escapeHTML(transaction.merchant)}</strong><br><span class="row-meta">${escapeHTML(transaction.paymentMethodName || "Unassigned")}</span></td>
         <td data-label="Category">${escapeHTML(categoryName(transaction.categoryID, transaction.categoryNameSnapshot))}</td>
         <td data-label="Scope"><span class="badge">${transaction.isBusiness ? "Business" : "Personal"}</span></td>
-        <td data-label="Receipt">${image ? `<img class="receipt-thumb" src="${image}" alt="Receipt for ${escapeHTML(transaction.merchant)}" data-receipt-url="${image}" role="button" tabindex="0">` : `<span class="badge ${missing ? "warning" : ""}">${missing ? "Missing proof" : "No receipt"}</span>`}</td>
+        <td data-label="Receipt">${receipt ? `<span class="receipt-preview-shell"><img class="receipt-thumb" alt="Receipt for ${escapeHTML(transaction.merchant)}" data-receipt-id="${escapeHTML(receipt.id)}" role="button" tabindex="0" hidden><span class="badge" data-receipt-placeholder>Receipt attached</span></span>` : `<span class="badge ${missing ? "warning" : ""}">${missing ? "Missing proof" : "No receipt"}</span>`}</td>
         <td data-label="Amount" class="text-right"><strong class="${transaction.type === "income" ? "positive" : ""}">${transaction.type === "income" ? "+" : "−"}${money(transaction.amount)}</strong></td>
         <td class="table-actions"><div class="row-actions"><button class="icon-button" data-edit-transaction="${transaction.id}" aria-label="Edit ${escapeHTML(transaction.merchant)}">${icon("pencil")}</button><button class="icon-button danger-icon" data-delete-transaction="${transaction.id}" aria-label="Delete ${escapeHTML(transaction.merchant)}">${icon("trash")}</button></div></td>
       </tr>`;
@@ -549,7 +578,7 @@ function bindViewEvents() {
 
   content.querySelectorAll("[data-edit-transaction]").forEach(button => button.addEventListener("click", () => openTransactionModal(state.transactions.find(item => item.id === button.dataset.editTransaction))));
   content.querySelectorAll("[data-delete-transaction]").forEach(button => button.addEventListener("click", () => softDeleteTransaction(button.dataset.deleteTransaction)));
-  bindReceiptPreviewEvents();
+  hydrateReceiptImages();
   content.querySelectorAll("[data-edit-budget]").forEach(button => button.addEventListener("click", () => openBudgetModal(state.budgets.find(item => item.id === button.dataset.editBudget))));
   content.querySelectorAll("[data-edit-event]").forEach(button => button.addEventListener("click", () => openEventModal(state.events.find(item => item.id === button.dataset.editEvent))));
   content.querySelectorAll("[data-delete-mileage]").forEach(button => button.addEventListener("click", () => runButtonTask(button, async () => { await deleteRecord(db, "mileageTrips", button.dataset.deleteMileage); await reload(); showToast("Trip deleted."); })));
@@ -585,11 +614,13 @@ function bindViewEvents() {
 function bindTransactionResultEvents() {
   content.querySelectorAll("[data-edit-transaction]").forEach(button => button.addEventListener("click", () => openTransactionModal(state.transactions.find(item => item.id === button.dataset.editTransaction))));
   content.querySelectorAll("[data-delete-transaction]").forEach(button => button.addEventListener("click", () => softDeleteTransaction(button.dataset.deleteTransaction)));
-  bindReceiptPreviewEvents();
+  hydrateReceiptImages();
 }
 
 function bindReceiptPreviewEvents(root = content) {
   root.querySelectorAll("[data-receipt-url]").forEach(image => {
+    if (image.dataset.receiptBound === "true") return;
+    image.dataset.receiptBound = "true";
     image.addEventListener("click", () => openImageViewer(image.dataset.receiptUrl, image.alt));
     image.addEventListener("keydown", event => {
       if (event.key === "Enter" || event.key === " ") {
@@ -598,6 +629,43 @@ function bindReceiptPreviewEvents(root = content) {
       }
     });
   });
+}
+
+async function hydrateReceiptImage(image, root) {
+  if (image.dataset.receiptLoading === "true" || image.dataset.receiptUrl) return;
+  image.dataset.receiptLoading = "true";
+  try {
+    const url = await receiptURL(image.dataset.receiptId);
+    if (!image.isConnected || !url) return;
+    image.src = url;
+    image.dataset.receiptUrl = url;
+    image.hidden = false;
+    image.parentElement?.querySelector("[data-receipt-placeholder]")?.remove();
+    bindReceiptPreviewEvents(image.parentElement || root);
+  } catch {
+    const placeholder = image.parentElement?.querySelector("[data-receipt-placeholder]");
+    if (placeholder) {
+      placeholder.textContent = "Receipt unavailable";
+      placeholder.classList.add("warning");
+    }
+  } finally {
+    delete image.dataset.receiptLoading;
+  }
+}
+
+function hydrateReceiptImages(root = content) {
+  const images = [...root.querySelectorAll("[data-receipt-id]")];
+  if (root !== content || typeof IntersectionObserver === "undefined") {
+    for (const image of images) hydrateReceiptImage(image, root);
+    return;
+  }
+  receiptContentObserver?.disconnect();
+  receiptContentObserver = new IntersectionObserver(entries => {
+    for (const entry of entries) {
+      if (entry.isIntersecting) hydrateReceiptImage(entry.target, root);
+    }
+  }, { root: window.innerWidth <= 720 ? main : null, rootMargin: "240px 0px" });
+  for (const image of images) receiptContentObserver.observe(image);
 }
 
 function handleAction(action) {
@@ -717,7 +785,7 @@ function openMoreMenu() {
 
 function openTransactionModal(transaction = null) {
   const selectedCategory = transaction?.categoryID || state.categories.find(category => category.isIncomeCategory === (transaction?.type === "income"))?.id || "";
-  const receiptImage = transaction?.receiptID ? receiptURL(transaction.receiptID) : null;
+  const attachedReceipt = transaction?.receiptID ? state.receipts.find(receipt => receipt.id === transaction.receiptID) : null;
   const modal = openModal({
     heading: transaction ? "Edit transaction" : "Add transaction",
     submitLabel: transaction ? "Save changes" : "Add transaction",
@@ -732,7 +800,7 @@ function openTransactionModal(transaction = null) {
       <label class="switch-row" id="tx-tax-row"><input type="checkbox" name="isTaxDeductible" ${transaction?.isTaxDeductible ? "checked" : ""} ${transaction?.type === "income" ? "disabled" : ""}><span class="switch-track" aria-hidden="true"></span><span>Tax-deductible expense</span></label>
       <div class="field full"><label for="tx-notes">Notes</label><textarea id="tx-notes" name="notes">${escapeHTML(transaction?.notes || "")}</textarea></div>
       <div class="field full receipt-field"><label for="tx-receipt">Receipt image</label>
-        ${receiptImage ? `<div class="receipt-attachment" id="tx-receipt-attachment"><img src="${receiptImage}" alt="Attached receipt for ${escapeHTML(transaction?.merchant || "transaction")}" data-receipt-url="${receiptImage}" role="button" tabindex="0"><div><strong>Receipt attached</strong><button class="danger-button compact-button" id="remove-tx-receipt" type="button">Remove</button></div></div>` : ""}
+        ${attachedReceipt ? `<div class="receipt-attachment" id="tx-receipt-attachment"><span class="receipt-preview-shell"><img alt="Attached receipt for ${escapeHTML(transaction?.merchant || "transaction")}" data-receipt-id="${escapeHTML(attachedReceipt.id)}" role="button" tabindex="0" hidden><span class="badge" data-receipt-placeholder>Loading receipt...</span></span><div><strong>Receipt attached</strong><button class="danger-button compact-button" id="remove-tx-receipt" type="button">Remove</button></div></div>` : ""}
         <input id="tx-receipt" name="receipt" type="file" accept="image/*">
         <input id="tx-remove-receipt" name="removeReceipt" type="hidden" value="false">
         <span class="row-meta" id="tx-receipt-help">${transaction?.receiptID ? "Choose a file to replace the attached receipt." : "Optional. Stored only in this browser."}</span>
@@ -770,7 +838,7 @@ function openTransactionModal(transaction = null) {
       };
       const receiptFile = form.get("receipt");
       if (form.get("removeReceipt") === "true" && transaction?.receiptID && !receiptFile?.size) {
-        await deleteRecord(db, "receipts", transaction.receiptID);
+        await deleteReceiptAttachment(db, attachedReceipt);
         record.receiptID = null;
         record.receiptImagePath = null;
         record.receiptAttached = false;
@@ -779,7 +847,7 @@ function openTransactionModal(transaction = null) {
       if (receiptFile?.size) {
         const receiptID = transaction?.receiptID || crypto.randomUUID();
         const relativePath = `receipts/${record.id}/${receiptFile.name.replace(/[^a-zA-Z0-9._-]/g, "_")}`;
-        await putRecord(db, "receipts", {
+        await saveReceiptAttachment(db, {
           id: receiptID,
           transactionID: record.id,
           fileName: receiptFile.name,
@@ -787,9 +855,8 @@ function openTransactionModal(transaction = null) {
           addedAt: now,
           relativePath,
           byteCount: receiptFile.size,
-          isMissing: false,
-          blob: receiptFile
-        });
+          isMissing: false
+        }, receiptFile, attachedReceipt?.storageKey);
         record.receiptID = receiptID;
         record.receiptImagePath = relativePath;
         record.receiptAttached = true;
@@ -801,7 +868,7 @@ function openTransactionModal(transaction = null) {
       showToast(transaction ? "Transaction updated." : "Transaction added.");
     }
   });
-  bindReceiptPreviewEvents(modal);
+  hydrateReceiptImages(modal);
   const typeSelect = modal.querySelector("#tx-type");
   const taxInput = modal.querySelector('[name="isTaxDeductible"]');
   const taxRow = modal.querySelector("#tx-tax-row");
@@ -1059,7 +1126,7 @@ async function restoreBackup(mode) {
     showToast("Restoring backup locally...");
     await yieldToBrowser();
     const preview = currentBackupPreview;
-    const result = await restorePortableBackup(db, preview, state, mode);
+    const result = await restorePortableBackup(db, preview, state, mode, { yieldControl: yieldToBrowser });
     currentBackupPreview = null;
     preview.entries.clear();
     await yieldToBrowser();
@@ -1124,7 +1191,10 @@ async function importCSVPreview() {
 async function exportBackup(filename = null, notify = true) {
   try {
     await yieldToBrowser();
-    const backupBlob = await createPortableBackupBlob(state, "web-1.0.0", { yieldControl: yieldToBrowser });
+    const backupBlob = await createPortableBackupBlob(state, "web-1.0.0", {
+      yieldControl: yieldToBrowser,
+      loadReceiptBlob: receipt => getReceiptBlob(db, receipt)
+    });
     const url = URL.createObjectURL(backupBlob);
     const link = document.createElement("a");
     link.href = url;
@@ -1193,6 +1263,7 @@ window.addEventListener("beforeunload", revokeObjectURLs);
 try {
   db = await openScopeDB();
   await seedScope(db);
+  await migrateReceiptStorage(db, yieldToBrowser);
   await reload(false);
   renderView();
 } catch (error) {
