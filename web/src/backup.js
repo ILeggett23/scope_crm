@@ -531,7 +531,7 @@ export function buildImportPlan(preview, currentState = {}, mode = "merge") {
   return plan;
 }
 
-export async function restorePortableBackup(db, preview, currentState, mode) {
+export async function restorePortableBackup(db, preview, currentState, mode, options = {}) {
   const plan = buildImportPlan(preview, currentState, mode);
   const receiptMetadata = new Map(preview.manifest.receipts.map(receipt => [receipt.relativePath, receipt]));
   const eligibleTransactionIDs = new Set([
@@ -539,7 +539,7 @@ export async function restorePortableBackup(db, preview, currentState, mode) {
     ...(mode === "merge" ? (currentState.transactions || []).map(transaction => transaction.id) : [])
   ]);
   const existingMissingReceiptIDs = new Set((currentState.receipts || [])
-    .filter(receipt => !receipt.blob)
+    .filter(receipt => !receipt.blob && !receipt.storageKey)
     .map(receipt => receipt.id));
   plan.receipts = plan.receipts.filter(receipt => eligibleTransactionIDs.has(receipt.transactionID));
   const restorableReceiptIDs = new Set([
@@ -570,7 +570,7 @@ export async function restorePortableBackup(db, preview, currentState, mode) {
     });
   }
 
-  await applyImportPlan(db, plan, receiptFiles, mode);
+  await applyImportPlan(db, plan, receiptFiles, mode, options);
   return {
     insertedTransactions: plan.transactions.length,
     skippedTransactions: preview.manifest.transactions.length - plan.transactions.length,
@@ -584,6 +584,7 @@ function buildPortableManifest(state, appVersion) {
   for (const receipt of state.receipts || []) {
     const copy = { ...receipt };
     delete copy.blob;
+    delete copy.storageKey;
     receipts.push(copy);
   }
 
@@ -626,9 +627,14 @@ export async function createPortableBackup(state, appVersion = "web-1.0.0") {
 export async function createPortableBackupBlob(state, appVersion = "web-1.0.0", options = {}) {
   const manifest = buildPortableManifest(state, appVersion);
   const manifestBytes = new TextEncoder().encode(JSON.stringify(manifest, null, 2));
-  const receiptEntries = (state.receipts || [])
-    .filter(receipt => receipt.blob && receipt.relativePath)
-    .map(receipt => ({ path: receipt.relativePath, data: receipt.blob }));
+  const receiptEntries = [];
+  for (const receipt of state.receipts || []) {
+    const blob = receipt.blob || await options.loadReceiptBlob?.(receipt);
+    if (blob instanceof Blob && receipt.relativePath) {
+      receiptEntries.push({ path: receipt.relativePath, data: blob });
+    }
+    await (options.yieldControl || (() => Promise.resolve()))();
+  }
   return encodeStoredZipBlob([{ path: "manifest.json", data: manifestBytes }, ...receiptEntries], options);
 }
 
