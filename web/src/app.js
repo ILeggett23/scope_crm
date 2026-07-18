@@ -21,6 +21,7 @@ import {
 import { debounce, yieldToBrowser } from "./ui.js";
 
 const content = document.querySelector("#app-content");
+const topbar = document.querySelector(".topbar");
 const title = document.querySelector("#view-title");
 const eyebrow = document.querySelector("#view-eyebrow");
 const modalRoot = document.querySelector("#modal-root");
@@ -37,6 +38,7 @@ let receiptURLCache = new Map();
 let toastTimer;
 let modalReturnFocus = null;
 let imageViewerReturnFocus = null;
+let overlayScrollY = 0;
 
 const viewMeta = {
   dashboard: ["Scope", "Financial overview"],
@@ -91,7 +93,20 @@ function showToast(message) {
 function syncOverlayState() {
   const hasOverlay = Boolean(modalRoot.firstElementChild)
     || !imageViewer.hidden;
-  document.body.classList.toggle("overlay-open", hasOverlay);
+  const wasOpen = document.body.classList.contains("overlay-open");
+  if (hasOverlay && !wasOpen) {
+    overlayScrollY = window.scrollY;
+    document.body.style.top = `-${overlayScrollY}px`;
+    document.body.classList.add("overlay-open");
+  } else if (!hasOverlay && wasOpen) {
+    document.body.classList.remove("overlay-open");
+    document.body.style.removeProperty("top");
+    window.scrollTo(0, overlayScrollY);
+  }
+}
+
+function syncTopbarScrollState() {
+  topbar.classList.toggle("is-scrolled", window.scrollY > 8);
 }
 
 function trapFocus(event, container) {
@@ -218,18 +233,18 @@ function renderDashboard() {
         </div>
       </article>
 
-      <article class="card span-6">
+      <article class="card span-6 scope-summary-card">
         <div class="card-header compact"><div class="section-title"><span class="section-icon personal">${icon("home")}</span><div><h2>Personal</h2><p>Everyday spending this month</p></div></div></div>
         <p class="metric-value">${money(personalSpend)}</p>
         <p class="metric-foot">${snapshot.monthly.filter(item => item.type === "expense" && !item.isBusiness).length} personal expenses</p>
       </article>
-      <article class="card span-6">
+      <article class="card span-6 scope-summary-card">
         <div class="card-header compact"><div class="section-title"><span class="section-icon business">${icon("briefcase")}</span><div><h2>Business</h2><p>Business spending this month</p></div></div></div>
         <p class="metric-value">${money(businessSpend)}</p>
         <p class="metric-foot">${snapshot.monthly.filter(item => item.type === "expense" && item.isBusiness).length} business expenses</p>
       </article>
 
-      <article class="card span-7">
+      <article class="card span-7 dashboard-budget-card">
         <div class="card-header">
           <div class="section-title"><span class="section-icon">${icon("budget")}</span><div><h2>Budget progress</h2><p>Monthly category limits</p></div></div>
           <button class="secondary-button" data-view-jump="budget">Manage</button>
@@ -351,7 +366,7 @@ function renderEvents() {
         <p class="row-meta">${formatDate(event.nextDate)}${event.location ? ` · ${escapeHTML(event.location)}` : ""}</p>
         <p class="metric-value">${money(event.estimatedCost)}</p>
         <p class="metric-foot">${event.estimatedMileage ? `${event.estimatedMileage} estimated miles · ` : ""}${escapeHTML(categoryName(event.categoryID))}</p>
-        <div style="margin-top:12px"><span class="badge ${event.isActive === false ? "" : "good"}">${event.isActive === false ? "Paused" : "Active"}</span></div>
+        <div class="event-status"><span class="badge ${event.isActive === false ? "" : "good"}">${event.isActive === false ? "Paused" : "Active"}</span></div>
       </article>`).join("")}</div>` : emptyState("□", "No events yet", "Add bills, subscriptions, conferences, or one-time plans.")}
   </div>`;
 }
@@ -435,14 +450,14 @@ function renderImport() {
 }
 
 function backupPreviewMarkup(preview) {
-  return `<div style="margin-top:16px">
+  return `<div class="preview-block">
     <h3>Review backup</h3>
     <div class="list-row"><span>Transactions</span><strong>${preview.manifest.counts.transactions || preview.manifest.transactions.length}</strong></div>
     <div class="list-row"><span>Receipts</span><strong>${preview.manifest.counts.receipts || preview.manifest.receipts.length}</strong></div>
     <div class="list-row"><span>Existing matches</span><strong>${preview.duplicateIDs + preview.duplicateFingerprints}</strong></div>
     <div class="list-row"><span>Missing receipt files</span><strong>${preview.missingReceipts.length}</strong></div>
-    ${preview.warnings.length ? `<div class="callout warning" style="margin-top:12px">${preview.warnings.map(escapeHTML).join("<br>")}</div>` : ""}
-    <div class="filter-row" style="margin-top:14px">
+    ${preview.warnings.length ? `<div class="callout warning preview-warning">${preview.warnings.map(escapeHTML).join("<br>")}</div>` : ""}
+    <div class="filter-row preview-actions">
       <button class="primary-button" data-action="restore-merge">Safe Merge</button>
       <button class="danger-button" data-action="restore-replace">Full Restore</button>
     </div>
@@ -450,12 +465,12 @@ function backupPreviewMarkup(preview) {
 }
 
 function csvPreviewMarkup(preview) {
-  return `<div style="margin-top:16px">
+  return `<div class="preview-block">
     <h3>Import preview</h3>
     <p class="row-meta">${preview.transactions.length} rows found · balance values are reference-only</p>
     <div class="list">${preview.transactions.slice(0, 5).map(item => `<div class="list-row"><div class="row-main"><p class="row-title">${escapeHTML(item.merchant)}</p><p class="row-meta">${formatDate(item.date)} · ${item.type === "income" ? "Deposit" : "Expense"}${item.balanceAfterTransaction != null ? ` · Balance after ${money(item.balanceAfterTransaction)}` : ""}</p></div><span class="row-amount">${money(item.amount)}</span></div>`).join("")}</div>
     ${preview.warnings.length ? `<div class="callout warning">${preview.warnings.map(escapeHTML).join("<br>")}</div>` : ""}
-    <button class="primary-button" style="margin-top:14px" data-action="confirm-csv-import">Import ${preview.transactions.length} transactions</button>
+    <button class="primary-button preview-submit" data-action="confirm-csv-import">Import ${preview.transactions.length} transactions</button>
   </div>`;
 }
 
@@ -475,7 +490,7 @@ function renderSettings() {
       <div class="card-header"><div><h2>Backup & transfer</h2><p>Compatible with Scope for iPhone</p></div></div>
       <div class="button-stack"><button class="primary-button" data-action="export-backup">Create Portable Backup</button>
       <button class="secondary-button" data-view-jump="import">Restore a Backup</button></div>
-      <p class="row-meta" style="margin-top:12px">Includes soft-deleted history, relationships, and locally stored receipt files.</p>
+      <p class="row-meta backup-note">Includes soft-deleted history, relationships, and locally stored receipt files.</p>
     </article>
     <article class="card span-7">
       <div class="card-header"><div><h2>Categories</h2><p>Personal and business organization</p></div><button class="secondary-button" data-action="add-category">${icon("plus")} Add</button></div>
@@ -552,8 +567,8 @@ function bindTransactionResultEvents() {
   bindReceiptPreviewEvents();
 }
 
-function bindReceiptPreviewEvents() {
-  content.querySelectorAll("[data-receipt-url]").forEach(image => {
+function bindReceiptPreviewEvents(root = content) {
+  root.querySelectorAll("[data-receipt-url]").forEach(image => {
     image.addEventListener("click", () => openImageViewer(image.dataset.receiptUrl, image.alt));
     image.addEventListener("keydown", event => {
       if (event.key === "Enter" || event.key === " ") {
@@ -591,6 +606,38 @@ function openModal({ heading, body, submitLabel = "Save", onSubmit, dangerAction
   </section></div>`;
   modalRoot.querySelectorAll("[data-close-modal]").forEach(button => button.addEventListener("click", closeModal));
   modalRoot.querySelector(".modal-backdrop").addEventListener("click", event => { if (event.target === event.currentTarget) closeModal(); });
+  const modal = modalRoot.querySelector(".modal");
+  const modalHeader = modalRoot.querySelector(".modal-header");
+  let dragStart = null;
+  modalHeader.addEventListener("pointerdown", event => {
+    if (window.innerWidth > 720 || event.target.closest("button")) return;
+    dragStart = event.clientY;
+    modalHeader.setPointerCapture(event.pointerId);
+    modal.classList.add("is-dragging");
+  });
+  modalHeader.addEventListener("pointermove", event => {
+    if (dragStart == null) return;
+    modal.style.setProperty("--modal-drag", `${Math.max(0, event.clientY - dragStart)}px`);
+  });
+  const finishDrag = event => {
+    if (dragStart == null) return;
+    const distance = Math.max(0, event.clientY - dragStart);
+    dragStart = null;
+    modal.classList.remove("is-dragging");
+    if (distance > 96) closeModal();
+    else modal.style.removeProperty("--modal-drag");
+  };
+  modalHeader.addEventListener("pointerup", finishDrag);
+  modalHeader.addEventListener("pointercancel", () => {
+    dragStart = null;
+    modal.classList.remove("is-dragging");
+    modal.style.removeProperty("--modal-drag");
+  });
+  modalRoot.querySelector("#modal-form").addEventListener("focusin", event => {
+    if (window.innerWidth <= 720 && event.target.matches("input, select, textarea")) {
+      window.setTimeout(() => event.target.scrollIntoView({ block: "center", behavior: "smooth" }), 120);
+    }
+  });
   modalRoot.querySelector("#modal-form").addEventListener("submit", async event => {
     event.preventDefault();
     const modalForm = event.currentTarget;
@@ -613,6 +660,7 @@ function openModal({ heading, body, submitLabel = "Save", onSubmit, dangerAction
   }
   syncOverlayState();
   setTimeout(() => modalRoot.querySelector("input, select, textarea")?.focus(), 30);
+  return modal;
 }
 
 function closeModal() {
@@ -647,7 +695,8 @@ function openMoreMenu() {
 
 function openTransactionModal(transaction = null) {
   const selectedCategory = transaction?.categoryID || state.categories.find(category => category.isIncomeCategory === (transaction?.type === "income"))?.id || "";
-  openModal({
+  const receiptImage = transaction?.receiptID ? receiptURL(transaction.receiptID) : null;
+  const modal = openModal({
     heading: transaction ? "Edit transaction" : "Add transaction",
     submitLabel: transaction ? "Save changes" : "Add transaction",
     body: `<div class="form-grid">
@@ -657,10 +706,15 @@ function openTransactionModal(transaction = null) {
       <div class="field"><label for="tx-merchant">Merchant or source</label><input id="tx-merchant" name="merchant" required value="${escapeHTML(transaction?.merchant || "")}"></div>
       <div class="field"><label for="tx-category">Category</label><select id="tx-category" name="categoryID">${categoryOptions(selectedCategory)}</select></div>
       <div class="field"><label for="tx-payment">Payment method</label><select id="tx-payment" name="paymentMethodName">${paymentOptions(transaction?.paymentMethodName || "Checking")}</select></div>
-      <label class="checkbox-row"><input type="checkbox" name="isBusiness" ${transaction?.isBusiness ? "checked" : ""}> Business transaction</label>
-      <label class="checkbox-row"><input type="checkbox" name="isTaxDeductible" ${transaction?.isTaxDeductible ? "checked" : ""}> Tax-deductible expense</label>
+      <label class="switch-row"><input type="checkbox" name="isBusiness" ${transaction?.isBusiness ? "checked" : ""}><span class="switch-track" aria-hidden="true"></span><span>Business transaction</span></label>
+      <label class="switch-row" id="tx-tax-row"><input type="checkbox" name="isTaxDeductible" ${transaction?.isTaxDeductible ? "checked" : ""} ${transaction?.type === "income" ? "disabled" : ""}><span class="switch-track" aria-hidden="true"></span><span>Tax-deductible expense</span></label>
       <div class="field full"><label for="tx-notes">Notes</label><textarea id="tx-notes" name="notes">${escapeHTML(transaction?.notes || "")}</textarea></div>
-      <div class="field full"><label for="tx-receipt">Receipt image</label><input id="tx-receipt" name="receipt" type="file" accept="image/*"><span class="row-meta">${transaction?.receiptID ? "Choose a file to replace the attached receipt." : "Optional. Stored only in this browser."}</span></div>
+      <div class="field full receipt-field"><label for="tx-receipt">Receipt image</label>
+        ${receiptImage ? `<div class="receipt-attachment" id="tx-receipt-attachment"><img src="${receiptImage}" alt="Attached receipt for ${escapeHTML(transaction?.merchant || "transaction")}" data-receipt-url="${receiptImage}" role="button" tabindex="0"><div><strong>Receipt attached</strong><button class="danger-button compact-button" id="remove-tx-receipt" type="button">Remove</button></div></div>` : ""}
+        <input id="tx-receipt" name="receipt" type="file" accept="image/*">
+        <input id="tx-remove-receipt" name="removeReceipt" type="hidden" value="false">
+        <span class="row-meta" id="tx-receipt-help">${transaction?.receiptID ? "Choose a file to replace the attached receipt." : "Optional. Stored only in this browser."}</span>
+      </div>
     </div>`,
     onSubmit: async form => {
       const category = state.categories.find(item => item.id === form.get("categoryID"));
@@ -693,6 +747,13 @@ function openTransactionModal(transaction = null) {
         sourceFileHash: transaction?.sourceFileHash || null
       };
       const receiptFile = form.get("receipt");
+      if (form.get("removeReceipt") === "true" && transaction?.receiptID && !receiptFile?.size) {
+        await deleteRecord(db, "receipts", transaction.receiptID);
+        record.receiptID = null;
+        record.receiptImagePath = null;
+        record.receiptAttached = false;
+        record.receiptAddedDate = null;
+      }
       if (receiptFile?.size) {
         const receiptID = transaction?.receiptID || crypto.randomUUID();
         const relativePath = `receipts/${record.id}/${receiptFile.name.replace(/[^a-zA-Z0-9._-]/g, "_")}`;
@@ -718,6 +779,23 @@ function openTransactionModal(transaction = null) {
       showToast(transaction ? "Transaction updated." : "Transaction added.");
     }
   });
+  bindReceiptPreviewEvents(modal);
+  const typeSelect = modal.querySelector("#tx-type");
+  const taxInput = modal.querySelector('[name="isTaxDeductible"]');
+  const taxRow = modal.querySelector("#tx-tax-row");
+  const syncTaxState = () => {
+    const disabled = typeSelect.value === "income";
+    taxInput.disabled = disabled;
+    if (disabled) taxInput.checked = false;
+    taxRow.classList.toggle("is-disabled", disabled);
+  };
+  typeSelect.addEventListener("change", syncTaxState);
+  syncTaxState();
+  modal.querySelector("#remove-tx-receipt")?.addEventListener("click", () => {
+    modal.querySelector("#tx-remove-receipt").value = "true";
+    modal.querySelector("#tx-receipt-attachment").hidden = true;
+    modal.querySelector("#tx-receipt-help").textContent = "Receipt will be removed when you save.";
+  });
 }
 
 async function softDeleteTransaction(id) {
@@ -735,7 +813,7 @@ function openBudgetModal(budget = null) {
       <div class="field full"><label for="budget-category">Category</label><select id="budget-category" name="categoryID" required>${categoryOptions(budget?.categoryID, false)}</select></div>
       <div class="field"><label for="budget-amount">Monthly amount</label><input id="budget-amount" name="monthlyAmount" type="number" min="0" step="1" required value="${budget?.monthlyAmount ?? ""}"></div>
       <div class="field"><label for="budget-threshold">Alert at</label><select id="budget-threshold" name="alertThreshold"><option value="0.75" ${budget?.alertThreshold === .75 ? "selected" : ""}>75%</option><option value="0.8" ${!budget || budget.alertThreshold === .8 ? "selected" : ""}>80%</option><option value="0.9" ${budget?.alertThreshold === .9 ? "selected" : ""}>90%</option></select></div>
-      <label class="checkbox-row full"><input type="checkbox" name="rolloverEnabled" ${budget?.rolloverEnabled ? "checked" : ""}> Roll unused budget forward</label>
+      <label class="switch-row full"><input type="checkbox" name="rolloverEnabled" ${budget?.rolloverEnabled ? "checked" : ""}><span class="switch-track" aria-hidden="true"></span><span>Roll unused budget forward</span></label>
     </div>`,
     dangerAction: budget ? async () => { await deleteRecord(db, "budgets", budget.id); closeModal(); await reload(); showToast("Budget deleted."); } : null,
     onSubmit: async form => {
@@ -768,7 +846,7 @@ function openEventModal(event = null) {
       <div class="field"><label for="event-miles">Estimated mileage</label><input id="event-miles" name="estimatedMileage" type="number" min="0" step="0.1" value="${event?.estimatedMileage || ""}"></div>
       <div class="field full"><label for="event-location">Location</label><input id="event-location" name="location" value="${escapeHTML(event?.location || "")}"></div>
       <div class="field full"><label for="event-notes">Notes</label><textarea id="event-notes" name="notes">${escapeHTML(event?.notes || "")}</textarea></div>
-      <label class="checkbox-row full"><input type="checkbox" name="isActive" ${event?.isActive === false ? "" : "checked"}> Active</label>
+      <label class="switch-row full"><input type="checkbox" name="isActive" ${event?.isActive === false ? "" : "checked"}><span class="switch-track" aria-hidden="true"></span><span>Active</span></label>
     </div>`,
     dangerAction: event ? async () => { await deleteRecord(db, "events", event.id); closeModal(); await reload(); showToast("Event deleted."); } : null,
     onSubmit: async form => {
@@ -827,7 +905,7 @@ function openCategoryModal() {
       <div class="field full"><label for="category-name">Name</label><input id="category-name" name="name" required></div>
       <div class="field"><label for="category-color">Color</label><input id="category-color" name="colorHex" type="color" value="#0d8a55"></div>
       <div class="field"><label for="category-symbol">Short symbol name</label><input id="category-symbol" name="symbol" value="tag"></div>
-      <label class="checkbox-row full"><input type="checkbox" name="isIncomeCategory"> Income category</label>
+      <label class="switch-row full"><input type="checkbox" name="isIncomeCategory"><span class="switch-track" aria-hidden="true"></span><span>Income category</span></label>
     </div>`,
     onSubmit: async form => {
       await putRecord(db, "categories", {
@@ -1037,6 +1115,8 @@ function closeImageViewer() {
 document.querySelectorAll("[data-view]").forEach(button => button.addEventListener("click", () => setView(button.dataset.view)));
 document.querySelector("#mobile-more-button").addEventListener("click", openMoreMenu);
 document.querySelector("#quick-add-button").addEventListener("click", () => openTransactionModal());
+window.addEventListener("scroll", syncTopbarScrollState, { passive: true });
+syncTopbarScrollState();
 document.querySelector("#close-image-viewer").addEventListener("click", closeImageViewer);
 imageViewer.addEventListener("click", event => {
   if (event.target === imageViewer) closeImageViewer();
