@@ -21,6 +21,7 @@ import {
 import { debounce, yieldToBrowser } from "./ui.js";
 
 const content = document.querySelector("#app-content");
+const main = document.querySelector(".main");
 const topbar = document.querySelector(".topbar");
 const title = document.querySelector("#view-title");
 const eyebrow = document.querySelector("#view-eyebrow");
@@ -95,18 +96,22 @@ function syncOverlayState() {
     || !imageViewer.hidden;
   const wasOpen = document.body.classList.contains("overlay-open");
   if (hasOverlay && !wasOpen) {
-    overlayScrollY = window.scrollY;
-    document.body.style.top = `-${overlayScrollY}px`;
+    const isMobile = window.innerWidth <= 720;
+    overlayScrollY = isMobile ? main.scrollTop : window.scrollY;
+    document.body.style.top = isMobile ? "0" : `-${overlayScrollY}px`;
     document.body.classList.add("overlay-open");
   } else if (!hasOverlay && wasOpen) {
+    const isMobile = window.innerWidth <= 720;
     document.body.classList.remove("overlay-open");
     document.body.style.removeProperty("top");
-    window.scrollTo(0, overlayScrollY);
+    if (isMobile) main.scrollTop = overlayScrollY;
+    else window.scrollTo(0, overlayScrollY);
   }
 }
 
 function syncTopbarScrollState() {
-  topbar.classList.toggle("is-scrolled", window.scrollY > 8);
+  const scrollTop = window.innerWidth <= 720 ? main.scrollTop : window.scrollY;
+  topbar.classList.toggle("is-scrolled", scrollTop > 8);
 }
 
 function trapFocus(event, container) {
@@ -183,7 +188,8 @@ function setView(view) {
   title.textContent = heading;
   eyebrow.textContent = detail;
   renderView();
-  window.scrollTo({ top: 0, behavior: "smooth" });
+  if (window.innerWidth <= 720) main.scrollTo({ top: 0, behavior: "smooth" });
+  else window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
 function renderView() {
@@ -1116,6 +1122,7 @@ document.querySelectorAll("[data-view]").forEach(button => button.addEventListen
 document.querySelector("#mobile-more-button").addEventListener("click", openMoreMenu);
 document.querySelector("#quick-add-button").addEventListener("click", () => openTransactionModal());
 window.addEventListener("scroll", syncTopbarScrollState, { passive: true });
+main.addEventListener("scroll", syncTopbarScrollState, { passive: true });
 syncTopbarScrollState();
 document.querySelector("#close-image-viewer").addEventListener("click", closeImageViewer);
 imageViewer.addEventListener("click", event => {
