@@ -10,9 +10,9 @@ import {
 import { calculateSnapshot, money } from "./finance.js";
 import {
   createPortableBackup,
-  previewArchive,
+  previewArchiveAsync,
   restorePortableBackup
-} from "./backup.js";
+} from "./backup.js?v=20260717-4";
 import {
   parseFinancialCSV,
   sha256Hex,
@@ -35,6 +35,7 @@ let state;
 let currentView = "dashboard";
 let currentCSVPreview = null;
 let currentBackupPreview = null;
+let backupReadGeneration = 0;
 let receiptURLCache = new Map();
 let toastTimer;
 let modalReturnFocus = null;
@@ -172,6 +173,11 @@ function paymentOptions(selected = "") {
 }
 
 function setView(view) {
+  if (currentView === "import" && view !== "import") {
+    backupReadGeneration += 1;
+    currentBackupPreview = null;
+    currentCSVPreview = null;
+  }
   currentView = view;
   document.querySelectorAll("[data-view]").forEach(button => {
     const isActive = button.dataset.view === view;
@@ -203,7 +209,15 @@ function renderView() {
     import: renderImport,
     settings: renderSettings
   }[currentView] || renderDashboard;
-  content.innerHTML = renderer();
+  try {
+    content.innerHTML = renderer();
+  } catch {
+    content.innerHTML = `<div class="page-stack"><div class="callout warning">
+      <strong>This section could not display one of its restored records.</strong>
+      <p class="row-meta">Your data is still stored locally. Return to Import and restore a validated Scope backup, or try loading this section again.</p>
+      <button class="secondary-button" data-action="reload-view">Try again</button>
+    </div></div>`;
+  }
   bindViewEvents();
 }
 
@@ -597,6 +611,7 @@ function handleAction(action) {
     case "restore-merge": return restoreBackup("merge");
     case "restore-replace": return restoreBackup("replace");
     case "confirm-csv-import": return importCSVPreview();
+    case "reload-view": return reload();
     default: throw new Error("Unknown Scope action.");
   }
 }
@@ -999,13 +1014,21 @@ async function saveSettings(event) {
 async function handleBackupFile(event) {
   const file = event.target.files?.[0];
   if (!file) return;
+  const readGeneration = ++backupReadGeneration;
   try {
     event.target.setAttribute("aria-busy", "true");
+    showToast("Reading backup locally...");
     await yieldToBrowser();
-    currentBackupPreview = previewArchive(await file.arrayBuffer(), state);
+    const preview = await previewArchiveAsync(await file.arrayBuffer(), state, {
+      yieldControl: yieldToBrowser,
+      shouldCancel: () => readGeneration !== backupReadGeneration || currentView !== "import"
+    });
+    if (readGeneration !== backupReadGeneration || currentView !== "import") return;
+    currentBackupPreview = preview;
     renderView();
     showToast("Backup validated. Review before restoring.");
   } catch (error) {
+    if (error?.name === "AbortError") return;
     currentBackupPreview = null;
     renderView();
     showToast(error?.message || "That backup could not be read.");
