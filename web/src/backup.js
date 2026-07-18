@@ -1,6 +1,7 @@
 import { applyImportPlan } from "./db.js";
 
 export const BACKUP_SCHEMA_VERSION = 1;
+const CRC_CHUNK_SIZE = 256 * 1024;
 const collections = [
   "transactions",
   "categories",
@@ -13,6 +14,15 @@ const collections = [
   "recurringExpenses",
   "savingsGoals"
 ];
+
+const crcTable = new Uint32Array(256);
+for (let index = 0; index < crcTable.length; index += 1) {
+  let value = index;
+  for (let bit = 0; bit < 8; bit += 1) {
+    value = (value & 1) ? (value >>> 1) ^ 0xedb88320 : value >>> 1;
+  }
+  crcTable[index] = value >>> 0;
+}
 
 function readU16(view, offset) {
   if (offset + 2 > view.byteLength) throw new Error("Malformed ZIP archive.");
@@ -27,11 +37,24 @@ function readU32(view, offset) {
 export function crc32(bytes) {
   let crc = 0xffffffff;
   for (const byte of bytes) {
-    let value = (crc ^ byte) & 0xff;
-    for (let bit = 0; bit < 8; bit += 1) {
-      value = (value & 1) ? (value >>> 1) ^ 0xedb88320 : value >>> 1;
+    crc = (crc >>> 8) ^ crcTable[(crc ^ byte) & 0xff];
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+async function crc32Async(bytes, options = {}) {
+  const chunkSize = Math.max(16 * 1024, Number(options.chunkSize) || CRC_CHUNK_SIZE);
+  const yieldControl = options.yieldControl || (() => new Promise(resolve => setTimeout(resolve, 0)));
+  const shouldCancel = options.shouldCancel || (() => false);
+  let crc = 0xffffffff;
+
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    if (shouldCancel()) throw new DOMException("Backup reading was cancelled.", "AbortError");
+    const end = Math.min(bytes.length, offset + chunkSize);
+    for (let index = offset; index < end; index += 1) {
+      crc = (crc >>> 8) ^ crcTable[(crc ^ bytes[index]) & 0xff];
     }
-    crc = (crc >>> 8) ^ value;
+    if (end < bytes.length) await yieldControl();
   }
   return (crc ^ 0xffffffff) >>> 0;
 }
@@ -70,10 +93,51 @@ export function decodeStoredZip(buffer) {
 
     const path = new TextDecoder().decode(bytes.slice(nameStart, nameEnd));
     if (!isSafeArchivePath(path)) throw new Error(`Unsafe backup path: ${path}`);
-    const content = bytes.slice(contentStart, contentEnd);
+    const content = bytes.subarray(contentStart, contentEnd);
     if (crc32(content) !== expectedCRC) throw new Error(`Backup file failed integrity validation: ${path}`);
     entries.set(path, content);
     offset = contentEnd;
+  }
+
+  if (!entries.size) throw new Error("The selected file is not a valid Scope backup.");
+  return entries;
+}
+
+export async function decodeStoredZipAsync(buffer, options = {}) {
+  const bytes = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const entries = new Map();
+  let offset = 0;
+
+  while (offset + 4 <= bytes.length) {
+    if (options.shouldCancel?.()) throw new DOMException("Backup reading was cancelled.", "AbortError");
+    const signature = readU32(view, offset);
+    if (signature === 0x02014b50 || signature === 0x06054b50) break;
+    if (signature !== 0x04034b50 || offset + 30 > bytes.length) throw new Error("Malformed ZIP archive.");
+
+    const flags = readU16(view, offset + 6);
+    const compression = readU16(view, offset + 8);
+    const expectedCRC = readU32(view, offset + 14);
+    const size = readU32(view, offset + 18);
+    const nameLength = readU16(view, offset + 26);
+    const extraLength = readU16(view, offset + 28);
+    if (flags !== 0 || compression !== 0) throw new Error("This backup uses an unsupported ZIP compression method.");
+
+    const nameStart = offset + 30;
+    const nameEnd = nameStart + nameLength;
+    const contentStart = nameEnd + extraLength;
+    const contentEnd = contentStart + size;
+    if (contentEnd > bytes.length) throw new Error("Malformed ZIP archive.");
+
+    const path = new TextDecoder().decode(bytes.subarray(nameStart, nameEnd));
+    if (!isSafeArchivePath(path)) throw new Error(`Unsafe backup path: ${path}`);
+    const content = bytes.subarray(contentStart, contentEnd);
+    if (await crc32Async(content, options) !== expectedCRC) {
+      throw new Error(`Backup file failed integrity validation: ${path}`);
+    }
+    entries.set(path, content);
+    offset = contentEnd;
+    if (offset < bytes.length) await (options.yieldControl || (() => Promise.resolve()))();
   }
 
   if (!entries.size) throw new Error("The selected file is not a valid Scope backup.");
@@ -187,6 +251,7 @@ export function validateManifest(input) {
 
   const ids = new Set();
   for (const transaction of manifest.transactions) {
+    if (!transaction || typeof transaction !== "object") throw new Error("The backup contains an invalid transaction record.");
     if (!transaction.id || ids.has(transaction.id)) throw new Error("The backup contains missing or duplicate transaction IDs.");
     ids.add(transaction.id);
     if (!["income", "expense"].includes(transaction.type)) throw new Error(`Invalid transaction type for ${transaction.id}.`);
@@ -199,6 +264,26 @@ export function validateManifest(input) {
       }
     }
   }
+
+  const requiredID = (record, collection, key = "id") => {
+    if (!record || typeof record !== "object" || !record[key]) {
+      throw new Error(`The backup contains an invalid ${collection} record.`);
+    }
+  };
+  for (const category of manifest.categories) requiredID(category, "category");
+  for (const budget of manifest.budgets) requiredID(budget, "budget");
+  for (const event of manifest.events) requiredID(event, "event");
+  for (const trip of manifest.mileageTrips) requiredID(trip, "mileage trip");
+  for (const method of manifest.paymentMethods) requiredID(method, "payment method");
+  for (const account of manifest.accounts) requiredID(account, "account");
+  for (const receipt of manifest.receipts) {
+    requiredID(receipt, "receipt");
+    if (receipt.relativePath && !isSafeArchivePath(receipt.relativePath)) {
+      throw new Error(`Invalid receipt path for ${receipt.id}.`);
+    }
+  }
+  for (const recurring of manifest.recurringExpenses) requiredID(recurring, "recurring expense", "eventID");
+  for (const goal of manifest.savingsGoals) requiredID(goal, "savings goal");
   return manifest;
 }
 
@@ -216,6 +301,36 @@ function parseManifest(entries) {
 
 export function previewArchive(buffer, currentState = {}) {
   const entries = decodeStoredZip(buffer);
+  const manifest = parseManifest(entries);
+  const currentIDs = new Set((currentState.transactions || []).map(item => item.id));
+  const currentFingerprints = new Set((currentState.transactions || [])
+    .filter(item => item.status !== "deleted" && item.transactionFingerprint)
+    .map(item => item.transactionFingerprint));
+
+  let duplicateIDs = 0;
+  let duplicateFingerprints = 0;
+  for (const transaction of manifest.transactions) {
+    if (currentIDs.has(transaction.id)) duplicateIDs += 1;
+    else if (transaction.status !== "deleted" && transaction.transactionFingerprint && currentFingerprints.has(transaction.transactionFingerprint)) {
+      duplicateFingerprints += 1;
+    }
+  }
+  const missingReceipts = manifest.transactions
+    .filter(transaction => transaction.receiptImagePath && !entries.has(transaction.receiptImagePath))
+    .map(transaction => transaction.receiptImagePath);
+
+  return {
+    manifest,
+    entries,
+    duplicateIDs,
+    duplicateFingerprints,
+    missingReceipts,
+    warnings: [...manifest.warnings, ...missingReceipts.map(path => `Missing receipt file: ${path}`)]
+  };
+}
+
+export async function previewArchiveAsync(buffer, currentState = {}, options = {}) {
+  const entries = await decodeStoredZipAsync(buffer, options);
   const manifest = parseManifest(entries);
   const currentIDs = new Set((currentState.transactions || []).map(item => item.id));
   const currentFingerprints = new Set((currentState.transactions || [])
@@ -363,4 +478,3 @@ export function applyPlanToMemory(currentState, plan, mode = "merge", failAfter 
   }
   return draft;
 }
-
