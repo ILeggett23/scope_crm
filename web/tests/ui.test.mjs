@@ -48,7 +48,7 @@ test("yieldToBrowser resolves outside a browser runtime", async () => {
   await yieldToBrowser();
 });
 
-test("mobile UI contract prevents toolbar overflow and duplicate transaction actions", async () => {
+test("mobile UI contract prevents toolbar overflow and duplicate primary actions", async () => {
   const [css, app, html] = await Promise.all([
     readFile(new URL("../styles.css", import.meta.url), "utf8"),
     readFile(new URL("../src/app.js", import.meta.url), "utf8"),
@@ -68,4 +68,25 @@ test("mobile UI contract prevents toolbar overflow and duplicate transaction act
   assert.match(css, /\.section-toolbar\s*\{[^}]*flex-direction:\s*column/s);
   assert.match(css, /button, input, select, textarea\s*\{\s*min-width:\s*0/);
   assert.doesNotMatch(app, /No events yet[\s\S]{0,220}data-action="add-event"/);
+
+  const budgetView = app.slice(app.indexOf("function renderBudget()"), app.indexOf("function renderEvents()"));
+  assert.equal(budgetView.match(/data-action="add-budget"/g)?.length, 1);
+  assert.match(budgetView, /budget-toolbar/);
+  assert.match(css, /\.budget-toolbar\s*\{[^}]*gap:\s*22px/s);
+});
+
+test("assistant UI and response code are fully removed", async () => {
+  const [html, app, finance, css, icons] = await Promise.all([
+    readFile(new URL("../index.html", import.meta.url), "utf8"),
+    readFile(new URL("../src/app.js", import.meta.url), "utf8"),
+    readFile(new URL("../src/finance.js", import.meta.url), "utf8"),
+    readFile(new URL("../styles.css", import.meta.url), "utf8"),
+    readFile(new URL("../assets/icons.svg", import.meta.url), "utf8")
+  ]);
+
+  for (const source of [html, app, finance, css]) {
+    assert.doesNotMatch(source, /assistant|openai|chatgpt/i);
+  }
+  assert.doesNotMatch(icons, /icon-(sparkles|send)/);
+  assert.equal((html.match(/id="quick-add-button"/g) || []).length, 1);
 });
