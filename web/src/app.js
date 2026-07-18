@@ -130,8 +130,8 @@ async function reload(render = true) {
   if (render) renderView();
 }
 
-function emptyState(symbol, heading, message, action = "") {
-  return `<div class="empty-state"><span class="empty-symbol">${icon(symbol)}</span><strong>${escapeHTML(heading)}</strong><span>${escapeHTML(message)}</span>${action}</div>`;
+function emptyState(symbol, heading, message) {
+  return `<div class="empty-state"><span class="empty-symbol">${icon(symbol)}</span><strong>${escapeHTML(heading)}</strong><span>${escapeHTML(message)}</span></div>`;
 }
 
 function categoryName(id, fallback = "Uncategorized") {
