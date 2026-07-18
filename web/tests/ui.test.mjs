@@ -91,7 +91,7 @@ test("mobile transaction sheet and safe areas stay unobstructed", async () => {
   assert.match(css, /\.modal-body\s*\{[^}]*overflow-y:\s*auto/s);
   assert.match(css, /\.modal-footer\s*\{[^}]*position:\s*static/s);
   assert.match(css, /\.topbar\s*\{[^}]*border-bottom:\s*0[^}]*background:\s*var\(--bg-top\)/s);
-  assert.match(css, /\.main\s*\{[^}]*height:\s*calc\(100dvh\s*-\s*var\(--mobile-nav-height\)\s*-\s*var\(--mobile-nav-gap\)/s);
+  assert.match(css, /\.main\s*\{[^}]*min-height:\s*0[^}]*height:\s*calc\(100dvh\s*-\s*var\(--mobile-nav-height\)\s*-\s*var\(--mobile-nav-gap\)/s);
   assert.match(css, /body\.overlay-open \.main\s*\{\s*overflow:\s*hidden/);
   assert.match(css, /@media \(max-width:\s*430px\)[\s\S]*\.transaction-toolbar \.filter-row\s*\{[^}]*grid-template-columns:\s*1fr/s);
   assert.match(app, /scope-summary-card/);
