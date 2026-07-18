@@ -362,9 +362,10 @@ textarea { min-height: 94px; resize: vertical; }
 
 @media (max-width: 720px) {
   :root { --screen-padding: 16px; }
-  html { scroll-padding-bottom: calc(var(--mobile-nav-height) + var(--mobile-nav-gap) + 30px); }
+  html, body, .app-shell { height: 100dvh; overflow: hidden; }
   .sidebar { display: none; }
-  .main { margin-left: 0; padding-bottom: 0; }
+  .main { height: calc(100dvh - var(--mobile-nav-height) - var(--mobile-nav-gap) - 16px); margin-left: 0; padding-bottom: 0; overflow-x: clip; overflow-y: auto; overscroll-behavior-y: contain; scroll-padding-bottom: 34px; }
+  body.overlay-open .main { overflow: hidden; }
   .topbar { width: 100%; min-height: calc(71px + env(safe-area-inset-top)); padding: max(15px, env(safe-area-inset-top)) 16px 12px; border-bottom: 0; background: var(--bg-top); box-shadow: none; }
   .topbar.is-scrolled { box-shadow: 0 8px 24px rgba(31, 54, 45, .07); }
   .topbar > div:first-child { min-width: 0; }
@@ -373,7 +374,7 @@ textarea { min-height: 94px; resize: vertical; }
   .topbar-actions { flex: 0 0 auto; gap: 8px; }
   .topbar-actions .primary-button { width: 44px; padding: 0; }
   .topbar-actions .primary-button span { display: none; }
-  .content { width: 100%; overflow: clip; padding: 14px 14px calc(var(--mobile-nav-height) + var(--mobile-nav-gap) + 34px); scroll-padding-bottom: calc(var(--mobile-nav-height) + var(--mobile-nav-gap) + 34px); }
+  .content { width: 100%; overflow: clip; padding: 14px 14px 34px; scroll-padding-bottom: 34px; }
   .dashboard-intro { margin: 1px 2px 15px; }
   .dashboard-intro h2 { font-size: 23px; }
   .span-3, .span-4, .span-5, .span-6, .span-7, .span-8 { grid-column: span 12; }
