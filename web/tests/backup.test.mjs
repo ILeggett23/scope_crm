@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   encodeStoredZip,
   decodeStoredZip,
+  previewArchiveAsync,
   previewArchive,
   buildImportPlan,
   validateManifest,
@@ -120,3 +121,55 @@ test("failed in-memory import leaves original state unchanged", () => {
   assert.deepEqual(current, before);
 });
 
+test("large portable backups yield while validating receipt bytes", async () => {
+  const receiptBytes = new Uint8Array(768 * 1024).fill(7);
+  const value = manifest({
+    receipts: [{
+      id: transaction.receiptID,
+      transactionID: transaction.id,
+      fileName: "receipt.jpg",
+      note: "",
+      addedAt: now,
+      relativePath: transaction.receiptImagePath,
+      byteCount: receiptBytes.length,
+      isMissing: false
+    }]
+  });
+  const encoded = encodeStoredZip([
+    { path: "manifest.json", data: new TextEncoder().encode(JSON.stringify(value)) },
+    { path: transaction.receiptImagePath, data: receiptBytes }
+  ]);
+  let yields = 0;
+  const preview = await previewArchiveAsync(encoded, {}, {
+    chunkSize: 32 * 1024,
+    yieldControl: async () => { yields += 1; }
+  });
+
+  assert.ok(yields > 1);
+  assert.equal(preview.missingReceipts.length, 0);
+  assert.equal(preview.entries.get(transaction.receiptImagePath).byteLength, receiptBytes.length);
+});
+
+test("portable backup parsing can be cancelled when the user leaves Import", async () => {
+  const receiptBytes = new Uint8Array(512 * 1024).fill(3);
+  const encoded = encodeStoredZip([
+    { path: "manifest.json", data: new TextEncoder().encode(JSON.stringify(manifest())) },
+    { path: transaction.receiptImagePath, data: receiptBytes }
+  ]);
+  let cancelled = false;
+
+  await assert.rejects(previewArchiveAsync(encoded, {}, {
+    chunkSize: 32 * 1024,
+    yieldControl: async () => { cancelled = true; },
+    shouldCancel: () => cancelled
+  }), error => error?.name === "AbortError");
+});
+
+test("invalid related records are rejected before restore", () => {
+  assert.throws(() => previewArchive(archive(manifest({
+    categories: [{ name: "Missing stable ID" }]
+  })), {}), /invalid category record/i);
+  assert.throws(() => previewArchive(archive(manifest({
+    budgets: [null]
+  })), {}), /invalid budget record/i);
+});
