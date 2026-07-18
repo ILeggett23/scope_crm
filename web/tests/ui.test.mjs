@@ -56,6 +56,8 @@ test("mobile UI contract prevents toolbar overflow and duplicate primary actions
   ]);
 
   assert.match(html, /viewport-fit=cover/);
+  assert.match(html, /styles\.css\?v=/);
+  assert.match(html, /src\/app\.js\?v=/);
   assert.match(html, /id="mobile-more-button"/);
   assert.match(app, /function openMoreMenu\(\)/);
   assert.match(app, /\["mileage", "Mileage"/);
