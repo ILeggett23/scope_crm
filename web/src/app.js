@@ -18,6 +18,7 @@ import {
   sha256Hex,
   transactionFingerprint
 } from "./importer.js";
+import { debounce, yieldToBrowser } from "./ui.js";
 
 const content = document.querySelector("#app-content");
 const title = document.querySelector("#view-title");
@@ -36,7 +37,7 @@ let state;
 let currentView = "dashboard";
 let currentCSVPreview = null;
 let currentBackupPreview = null;
-let objectURLs = [];
+let receiptURLCache = new Map();
 let toastTimer;
 let modalReturnFocus = null;
 let assistantReturnFocus = null;
@@ -100,16 +101,33 @@ function syncOverlayState() {
   document.body.classList.toggle("overlay-open", hasOverlay);
 }
 
+function trapFocus(event, container) {
+  const focusable = [...container.querySelectorAll('button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [href], [tabindex]:not([tabindex="-1"])')]
+    .filter(element => element.getAttribute("aria-hidden") !== "true");
+  if (!focusable.length) return;
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
+}
+
 function revokeObjectURLs() {
-  for (const url of objectURLs) URL.revokeObjectURL(url);
-  objectURLs = [];
+  for (const url of receiptURLCache.values()) URL.revokeObjectURL(url);
+  receiptURLCache.clear();
 }
 
 function receiptURL(receiptID) {
+  const cachedURL = receiptURLCache.get(receiptID);
+  if (cachedURL) return cachedURL;
   const receipt = (state.receipts || []).find(item => item.id === receiptID);
   if (!receipt?.blob) return null;
   const url = URL.createObjectURL(receipt.blob);
-  objectURLs.push(url);
+  receiptURLCache.set(receiptID, url);
   return url;
 }
 
@@ -148,6 +166,11 @@ function setView(view) {
     if (isActive) button.setAttribute("aria-current", "page");
     else button.removeAttribute("aria-current");
   });
+  const moreButton = document.querySelector("#mobile-more-button");
+  const isMoreView = ["mileage", "reports", "import", "settings"].includes(view);
+  moreButton.classList.toggle("is-active", isMoreView);
+  if (isMoreView) moreButton.setAttribute("aria-current", "page");
+  else moreButton.removeAttribute("aria-current");
   const [heading, detail] = viewMeta[view] || viewMeta.dashboard;
   title.textContent = heading;
   eyebrow.textContent = detail;
@@ -270,8 +293,8 @@ function transactionRow(transaction) {
 function renderTransactions() {
   const transactions = activeTransactions(state.transactions).sort((a, b) => new Date(b.date) - new Date(a.date));
   return `<div class="page-stack">
-    <div class="section-toolbar">
-      <div class="filter-row">
+    <div class="section-toolbar transaction-toolbar">
+      <div class="filter-row" role="search" aria-label="Filter transactions">
         <input class="search-input" id="transaction-search" type="search" placeholder="Search merchant or category">
         <select id="transaction-type-filter" aria-label="Filter transaction type">
           <option value="all">All types</option><option value="income">Income</option><option value="expense">Expenses</option>
@@ -280,7 +303,7 @@ function renderTransactions() {
           <option value="all">Personal + business</option><option value="personal">Personal</option><option value="business">Business</option>
         </select>
       </div>
-      <button class="primary-button" data-action="add-transaction">${icon("plus")} Add transaction</button>
+      <button class="primary-button mobile-redundant-action" data-action="add-transaction">${icon("plus")} Add transaction</button>
     </div>
     <div id="transaction-results">
       ${renderTransactionTable(transactions)}
@@ -313,7 +336,7 @@ function renderBudget() {
   const snapshot = calculateSnapshot(state);
   const rows = snapshot.budgetRows.sort((a, b) => b.percent - a.percent);
   return `<div class="page-stack">
-    <div class="section-toolbar">
+    <div class="section-toolbar action-toolbar">
       <div><h2>Monthly budgets</h2><p class="row-meta">${money(snapshot.expenses)} spent · ${money(snapshot.remainingBudget)} remaining</p></div>
       <button class="primary-button" data-action="add-budget">${icon("plus")} Add budget</button>
     </div>
@@ -334,7 +357,7 @@ function renderBudget() {
 function renderEvents() {
   const events = [...state.events].sort((a, b) => new Date(a.nextDate) - new Date(b.nextDate));
   return `<div class="page-stack">
-    <div class="section-toolbar"><div><h2>Events and bills</h2><p class="row-meta">One-time and recurring costs</p></div><button class="primary-button" data-action="add-event">${icon("plus")} Add event</button></div>
+    <div class="section-toolbar action-toolbar"><div><h2>Events and bills</h2><p class="row-meta">One-time and recurring costs</p></div><button class="primary-button" data-action="add-event">${icon("plus")} Add event</button></div>
     ${events.length ? `<div class="dashboard-grid">${events.map(event => `
       <article class="card span-4">
         <div class="card-header"><div><h3>${escapeHTML(event.name)}</h3><p>${escapeHTML(recurrenceTitle(event.recurrence))}</p></div><button class="icon-button" data-edit-event="${event.id}" aria-label="Edit ${escapeHTML(event.name)}">${icon("pencil")}</button></div>
@@ -342,7 +365,7 @@ function renderEvents() {
         <p class="metric-value">${money(event.estimatedCost)}</p>
         <p class="metric-foot">${event.estimatedMileage ? `${event.estimatedMileage} estimated miles · ` : ""}${escapeHTML(categoryName(event.categoryID))}</p>
         <div style="margin-top:12px"><span class="badge ${event.isActive === false ? "" : "good"}">${event.isActive === false ? "Paused" : "Active"}</span></div>
-      </article>`).join("")}</div>` : emptyState("□", "No events yet", "Add bills, subscriptions, conferences, or one-time plans.", '<br><button class="primary-button" data-action="add-event">Add event</button>')}
+      </article>`).join("")}</div>` : emptyState("□", "No events yet", "Add bills, subscriptions, conferences, or one-time plans.")}
   </div>`;
 }
 
@@ -360,7 +383,7 @@ function renderMileage() {
       <article class="card span-4"><p class="metric-label">Mileage rate</p><p class="metric-value">${money(profile.defaultMileageRate || 0.7)}</p><p class="metric-foot">per business mile</p></article>
       <article class="card span-4"><p class="metric-label">Deduction estimate</p><p class="metric-value positive">${money(miles * Number(profile.defaultMileageRate || 0.7))}</p><p class="metric-foot">For record organization only</p></article>
     </div>
-    <div class="section-toolbar"><div><h2>Trips</h2></div><button class="primary-button" data-action="add-mileage">${icon("plus")} Add trip</button></div>
+    <div class="section-toolbar action-toolbar"><div><h2>Trips</h2></div><button class="primary-button" data-action="add-mileage">${icon("plus")} Add trip</button></div>
     ${trips.length ? `<div class="data-table-wrap"><table class="data-table"><thead><tr><th>Date</th><th>Route</th><th>Purpose</th><th class="text-right">Miles</th><th></th></tr></thead><tbody>
       ${trips.map(trip => `<tr><td data-label="Date">${formatDate(trip.date)}</td><td data-label="Route"><strong>${escapeHTML(trip.startLocation)}</strong><span class="route-arrow">${icon("chevron-right")}</span>${escapeHTML(trip.endLocation)}</td><td data-label="Purpose">${escapeHTML(trip.purpose)}</td><td data-label="Miles" class="text-right"><strong>${Number(trip.miles).toFixed(1)}</strong></td><td class="table-actions"><button class="icon-button danger-icon" data-delete-mileage="${trip.id}" aria-label="Delete trip">${icon("trash")}</button></td></tr>`).join("")}
     </tbody></table></div>` : emptyState("↗", "No mileage logged", "Add a business trip to estimate mileage deductions.")}
@@ -372,8 +395,9 @@ function renderReports() {
   const business = snapshot.monthly.filter(item => item.isBusiness);
   const personal = snapshot.monthly.filter(item => !item.isBusiness);
   const deductible = snapshot.transactions.filter(item => item.type === "expense" && item.isTaxDeductible);
-  const proof = deductible.filter(item => item.receiptAttached);
-  const missing = deductible.filter(item => !item.receiptAttached);
+  const receiptIDs = new Set((state.receipts || []).map(receipt => receipt.id));
+  const proof = deductible.filter(item => item.receiptAttached && receiptIDs.has(item.receiptID));
+  const missing = deductible.filter(item => !item.receiptAttached || !receiptIDs.has(item.receiptID));
   const total = list => list.filter(item => item.type === "expense").reduce((sum, item) => sum + Number(item.amount), 0);
   return `<div class="page-stack">
     <div class="dashboard-grid">
@@ -462,8 +486,8 @@ function renderSettings() {
     </article>
     <article class="card span-5">
       <div class="card-header"><div><h2>Backup & transfer</h2><p>Compatible with Scope for iPhone</p></div></div>
-      <button class="primary-button" data-action="export-backup">Create Portable Backup</button>
-      <button class="secondary-button" style="margin-top:10px" data-view-jump="import">Restore a Backup</button>
+      <div class="button-stack"><button class="primary-button" data-action="export-backup">Create Portable Backup</button>
+      <button class="secondary-button" data-view-jump="import">Restore a Backup</button></div>
       <p class="row-meta" style="margin-top:12px">Includes soft-deleted history, relationships, and locally stored receipt files.</p>
     </article>
     <article class="card span-7">
@@ -478,35 +502,57 @@ function renderSettings() {
   </div>`;
 }
 
+async function runButtonTask(button, task) {
+  if (button.dataset.busy === "true") return;
+  button.dataset.busy = "true";
+  button.disabled = true;
+  button.setAttribute("aria-busy", "true");
+  try {
+    await task();
+  } catch (error) {
+    showToast(error?.message || "Scope could not complete that action.");
+  } finally {
+    if (button.isConnected) {
+      button.disabled = false;
+      button.removeAttribute("aria-busy");
+      delete button.dataset.busy;
+    }
+  }
+}
+
 function bindViewEvents() {
   content.querySelectorAll("[data-view-jump]").forEach(button => button.addEventListener("click", () => setView(button.dataset.viewJump)));
-  content.querySelectorAll("[data-action]").forEach(button => button.addEventListener("click", () => handleAction(button.dataset.action)));
+  content.querySelectorAll("[data-action]").forEach(button => button.addEventListener("click", () => runButtonTask(button, () => handleAction(button.dataset.action))));
 
   content.querySelectorAll("[data-edit-transaction]").forEach(button => button.addEventListener("click", () => openTransactionModal(state.transactions.find(item => item.id === button.dataset.editTransaction))));
   content.querySelectorAll("[data-delete-transaction]").forEach(button => button.addEventListener("click", () => softDeleteTransaction(button.dataset.deleteTransaction)));
   bindReceiptPreviewEvents();
   content.querySelectorAll("[data-edit-budget]").forEach(button => button.addEventListener("click", () => openBudgetModal(state.budgets.find(item => item.id === button.dataset.editBudget))));
   content.querySelectorAll("[data-edit-event]").forEach(button => button.addEventListener("click", () => openEventModal(state.events.find(item => item.id === button.dataset.editEvent))));
-  content.querySelectorAll("[data-delete-mileage]").forEach(button => button.addEventListener("click", async () => { await deleteRecord(db, "mileageTrips", button.dataset.deleteMileage); await reload(); showToast("Trip deleted."); }));
-  content.querySelectorAll("[data-delete-category]").forEach(button => button.addEventListener("click", () => deleteCategory(button.dataset.deleteCategory)));
-  content.querySelectorAll("[data-delete-goal]").forEach(button => button.addEventListener("click", async () => { await deleteRecord(db, "savingsGoals", button.dataset.deleteGoal); await reload(); }));
+  content.querySelectorAll("[data-delete-mileage]").forEach(button => button.addEventListener("click", () => runButtonTask(button, async () => { await deleteRecord(db, "mileageTrips", button.dataset.deleteMileage); await reload(); showToast("Trip deleted."); })));
+  content.querySelectorAll("[data-delete-category]").forEach(button => button.addEventListener("click", () => runButtonTask(button, () => deleteCategory(button.dataset.deleteCategory))));
+  content.querySelectorAll("[data-delete-goal]").forEach(button => button.addEventListener("click", () => runButtonTask(button, async () => { await deleteRecord(db, "savingsGoals", button.dataset.deleteGoal); await reload(); showToast("Savings goal deleted."); })));
 
   const search = content.querySelector("#transaction-search");
   const type = content.querySelector("#transaction-type-filter");
   const scope = content.querySelector("#transaction-scope-filter");
-  const applyFilters = () => {
+  const applyFiltersNow = () => {
+    if (!search?.isConnected || currentView !== "transactions") return;
     const query = search.value.toLowerCase();
     const matches = activeTransactions(state.transactions)
       .filter(item => type.value === "all" || item.type === type.value)
       .filter(item => scope.value === "all" || (scope.value === "business" ? item.isBusiness : !item.isBusiness))
       .filter(item => !query || String(item.merchant).toLowerCase().includes(query) || categoryName(item.categoryID, item.categoryNameSnapshot).toLowerCase().includes(query))
       .sort((a,b) => new Date(b.date) - new Date(a.date));
-    content.querySelector("#transaction-results").innerHTML = renderTransactionTable(matches);
+    const results = content.querySelector("#transaction-results");
+    if (!results) return;
+    results.innerHTML = renderTransactionTable(matches);
     bindTransactionResultEvents();
   };
+  const applyFilters = debounce(applyFiltersNow, 120);
   search?.addEventListener("input", applyFilters);
-  type?.addEventListener("change", applyFilters);
-  scope?.addEventListener("change", applyFilters);
+  type?.addEventListener("change", () => { applyFilters.cancel(); applyFiltersNow(); });
+  scope?.addEventListener("change", () => { applyFilters.cancel(); applyFiltersNow(); });
 
   content.querySelector("#settings-form")?.addEventListener("submit", saveSettings);
   content.querySelector("#backup-file")?.addEventListener("change", handleBackupFile);
@@ -532,17 +578,20 @@ function bindReceiptPreviewEvents() {
 }
 
 function handleAction(action) {
-  if (action === "open-assistant") openAssistant();
-  if (action === "add-transaction") openTransactionModal();
-  if (action === "add-budget") openBudgetModal();
-  if (action === "add-event") openEventModal();
-  if (action === "add-mileage") openMileageModal();
-  if (action === "add-category") openCategoryModal();
-  if (action === "add-goal") openGoalModal();
-  if (action === "export-backup") exportBackup();
-  if (action === "restore-merge") restoreBackup("merge");
-  if (action === "restore-replace") restoreBackup("replace");
-  if (action === "confirm-csv-import") importCSVPreview();
+  switch (action) {
+    case "open-assistant": return openAssistant();
+    case "add-transaction": return openTransactionModal();
+    case "add-budget": return openBudgetModal();
+    case "add-event": return openEventModal();
+    case "add-mileage": return openMileageModal();
+    case "add-category": return openCategoryModal();
+    case "add-goal": return openGoalModal();
+    case "export-backup": return exportBackup();
+    case "restore-merge": return restoreBackup("merge");
+    case "restore-replace": return restoreBackup("replace");
+    case "confirm-csv-import": return importCSVPreview();
+    default: throw new Error("Unknown Scope action.");
+  }
 }
 
 function openModal({ heading, body, submitLabel = "Save", onSubmit, dangerAction = null, wide = false }) {
@@ -558,17 +607,24 @@ function openModal({ heading, body, submitLabel = "Save", onSubmit, dangerAction
   modalRoot.querySelector(".modal-backdrop").addEventListener("click", event => { if (event.target === event.currentTarget) closeModal(); });
   modalRoot.querySelector("#modal-form").addEventListener("submit", async event => {
     event.preventDefault();
+    const modalForm = event.currentTarget;
+    if (modalForm.dataset.busy === "true") return;
+    modalForm.dataset.busy = "true";
     const submitButton = event.submitter;
     if (submitButton) submitButton.disabled = true;
     try {
       await onSubmit(new FormData(event.currentTarget));
       closeModal();
     } catch (error) {
-      showToast(error.message);
+      showToast(error?.message || "Scope could not save those changes.");
       if (submitButton) submitButton.disabled = false;
+      delete modalForm.dataset.busy;
     }
   });
-  if (dangerAction) modalRoot.querySelector("#modal-danger").addEventListener("click", dangerAction);
+  if (dangerAction) {
+    const dangerButton = modalRoot.querySelector("#modal-danger");
+    dangerButton.addEventListener("click", () => runButtonTask(dangerButton, dangerAction));
+  }
   syncOverlayState();
   setTimeout(() => modalRoot.querySelector("input, select, textarea")?.focus(), 30);
 }
@@ -578,6 +634,29 @@ function closeModal() {
   syncOverlayState();
   if (modalReturnFocus?.isConnected) modalReturnFocus.focus();
   modalReturnFocus = null;
+}
+
+function openMoreMenu() {
+  modalReturnFocus = document.activeElement;
+  const items = [
+    ["mileage", "Mileage", "mileage", "Trips and deductions"],
+    ["reports", "Reports", "reports", "Financial summaries"],
+    ["import", "Import", "import", "Local documents and backups"],
+    ["settings", "Settings", "settings", "Profile and categories"]
+  ];
+  modalRoot.innerHTML = `<div class="modal-backdrop" role="presentation"><section class="modal more-modal" role="dialog" aria-modal="true" aria-labelledby="more-menu-title">
+    <header class="modal-header"><h2 id="more-menu-title">More</h2><button class="icon-button" type="button" data-close-modal aria-label="Close">${icon("x")}</button></header>
+    <div class="modal-body more-menu">${items.map(([view, label, symbol, detail]) => `<button class="more-menu-item" type="button" data-more-view="${view}"><span class="section-icon">${icon(symbol)}</span><span><strong>${label}</strong><small>${detail}</small></span>${icon("chevron-right", "more-chevron")}</button>`).join("")}</div>
+  </section></div>`;
+  modalRoot.querySelectorAll("[data-close-modal]").forEach(button => button.addEventListener("click", closeModal));
+  modalRoot.querySelector(".modal-backdrop").addEventListener("click", event => { if (event.target === event.currentTarget) closeModal(); });
+  modalRoot.querySelectorAll("[data-more-view]").forEach(button => button.addEventListener("click", () => {
+    const view = button.dataset.moreView;
+    closeModal();
+    setView(view);
+  }));
+  syncOverlayState();
+  setTimeout(() => modalRoot.querySelector("[data-more-view]")?.focus(), 30);
 }
 
 function openTransactionModal(transaction = null) {
@@ -781,7 +860,7 @@ function openCategoryModal() {
 }
 
 async function deleteCategory(id) {
-  if (state.budgets.some(item => item.categoryID === id) || state.transactions.some(item => item.categoryID === id)) {
+  if (state.budgets.some(item => item.categoryID === id) || activeTransactions(state.transactions).some(item => item.categoryID === id)) {
     showToast("This category is in use. Reassign its transactions and budget first.");
     return;
   }
@@ -815,30 +894,53 @@ function openGoalModal() {
 
 async function saveSettings(event) {
   event.preventDefault();
-  const form = new FormData(event.currentTarget);
-  await putRecord(db, "settings", {
-    key: "profile",
-    businessName: form.get("businessName").trim() || "Scope",
-    taxYear: Number(form.get("taxYear")),
-    defaultMileageRate: Number(form.get("defaultMileageRate")),
-    dailyReminderEnabled: false,
-    weeklyReminderEnabled: false
-  });
-  await reload();
-  showToast("Settings saved.");
+  const settingsForm = event.currentTarget;
+  if (settingsForm.dataset.busy === "true") return;
+  settingsForm.dataset.busy = "true";
+  const submitButton = event.submitter;
+  if (submitButton?.disabled) return;
+  if (submitButton) {
+    submitButton.disabled = true;
+    submitButton.setAttribute("aria-busy", "true");
+  }
+  const form = new FormData(settingsForm);
+  const currentProfile = state.settings.find(item => item.key === "profile") || {};
+  try {
+    await putRecord(db, "settings", {
+      ...currentProfile,
+      key: "profile",
+      businessName: form.get("businessName").trim() || "Scope",
+      taxYear: Number(form.get("taxYear")),
+      defaultMileageRate: Number(form.get("defaultMileageRate"))
+    });
+    await reload();
+    showToast("Settings saved.");
+  } catch (error) {
+    showToast(error?.message || "Settings could not be saved.");
+    if (submitButton?.isConnected) {
+      submitButton.disabled = false;
+      submitButton.removeAttribute("aria-busy");
+    }
+  } finally {
+    if (settingsForm.isConnected) delete settingsForm.dataset.busy;
+  }
 }
 
 async function handleBackupFile(event) {
   const file = event.target.files?.[0];
   if (!file) return;
   try {
+    event.target.setAttribute("aria-busy", "true");
+    await yieldToBrowser();
     currentBackupPreview = previewArchive(await file.arrayBuffer(), state);
     renderView();
     showToast("Backup validated. Review before restoring.");
   } catch (error) {
     currentBackupPreview = null;
     renderView();
-    showToast(error.message);
+    showToast(error?.message || "That backup could not be read.");
+  } finally {
+    if (event.target.isConnected) event.target.removeAttribute("aria-busy");
   }
 }
 
@@ -847,7 +949,11 @@ async function restoreBackup(mode) {
   if (mode === "replace") {
     const accepted = confirm("Full Restore will replace this browser's current Scope records. A safety backup will download first. Continue?");
     if (!accepted) return;
-    await exportBackup("Scope-Pre-Restore-Safety-Backup.zip", false);
+    const safetyBackupCreated = await exportBackup("Scope-Pre-Restore-Safety-Backup.zip", false);
+    if (!safetyBackupCreated) {
+      showToast("Full Restore stopped because the safety backup could not be created.");
+      return;
+    }
   }
   try {
     const result = await restorePortableBackup(db, currentBackupPreview, state, mode);
@@ -863,8 +969,11 @@ async function handleCSVFile(event) {
   const file = event.target.files?.[0];
   if (!file) return;
   try {
+    event.target.setAttribute("aria-busy", "true");
     const sourceHash = await sha256Hex(file);
-    currentCSVPreview = parseFinancialCSV(await file.text(), { sourceName: file.name, sourceHash });
+    const text = await file.text();
+    await yieldToBrowser();
+    currentCSVPreview = parseFinancialCSV(text, { sourceName: file.name, sourceHash });
     const existing = new Set(activeTransactions(state.transactions).map(item => item.transactionFingerprint));
     currentCSVPreview.transactions = currentCSVPreview.transactions.filter(item => !existing.has(item.transactionFingerprint));
     renderView();
@@ -872,7 +981,9 @@ async function handleCSVFile(event) {
   } catch (error) {
     currentCSVPreview = null;
     renderView();
-    showToast(error.message);
+    showToast(error?.message || "That CSV could not be imported.");
+  } finally {
+    if (event.target.isConnected) event.target.removeAttribute("aria-busy");
   }
 }
 
@@ -900,6 +1011,7 @@ async function importCSVPreview() {
 
 async function exportBackup(filename = null, notify = true) {
   try {
+    await yieldToBrowser();
     const bytes = await createPortableBackup(state);
     const url = URL.createObjectURL(new Blob([bytes], { type: "application/zip" }));
     const link = document.createElement("a");
@@ -908,8 +1020,10 @@ async function exportBackup(filename = null, notify = true) {
     link.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
     if (notify) showToast("Portable backup created.");
+    return true;
   } catch (error) {
-    showToast(error.message);
+    showToast(error?.message || "The portable backup could not be created.");
+    return false;
   }
 }
 
@@ -963,6 +1077,8 @@ function openImageViewer(url, alt) {
   viewerImage.src = url;
   viewerImage.alt = alt || "Attached receipt";
   viewerImage.style.transform = "scale(1)";
+  viewerImage.style.cursor = "zoom-in";
+  imageViewer.classList.remove("is-zoomed");
   imageViewer.hidden = false;
   syncOverlayState();
   document.querySelector("#close-image-viewer").focus();
@@ -970,6 +1086,7 @@ function openImageViewer(url, alt) {
 
 function closeImageViewer() {
   imageViewer.hidden = true;
+  imageViewer.classList.remove("is-zoomed");
   viewerImage.src = "";
   syncOverlayState();
   if (imageViewerReturnFocus?.isConnected) imageViewerReturnFocus.focus();
@@ -977,6 +1094,7 @@ function closeImageViewer() {
 }
 
 document.querySelectorAll("[data-view]").forEach(button => button.addEventListener("click", () => setView(button.dataset.view)));
+document.querySelector("#mobile-more-button").addEventListener("click", openMoreMenu);
 document.querySelector("#quick-add-button").addEventListener("click", () => openTransactionModal());
 document.querySelector("#assistant-button").addEventListener("click", openAssistant);
 document.querySelector("#close-assistant").addEventListener("click", closeAssistant);
@@ -1026,17 +1144,28 @@ document.querySelector("#close-image-viewer").addEventListener("click", closeIma
 imageViewer.addEventListener("click", event => {
   if (event.target === imageViewer) closeImageViewer();
   else if (event.target === viewerImage) {
-    viewerImage.style.transform = viewerImage.style.transform === "scale(2)" ? "scale(1)" : "scale(2)";
+    const willZoom = viewerImage.style.transform !== "scale(2)";
+    viewerImage.style.transform = willZoom ? "scale(2)" : "scale(1)";
+    imageViewer.classList.toggle("is-zoomed", willZoom);
     viewerImage.style.cursor = viewerImage.style.transform === "scale(2)" ? "zoom-out" : "zoom-in";
   }
 });
 document.addEventListener("keydown", event => {
+  if (event.key === "Tab") {
+    const activeSurface = !imageViewer.hidden
+      ? imageViewer
+      : assistantDrawer.classList.contains("is-open")
+        ? assistantDrawer
+        : modalRoot.querySelector(".modal");
+    if (activeSurface) trapFocus(event, activeSurface);
+  }
   if (event.key === "Escape") {
     if (!imageViewer.hidden) closeImageViewer();
     else if (assistantDrawer.classList.contains("is-open")) closeAssistant();
     else closeModal();
   }
 });
+window.addEventListener("beforeunload", revokeObjectURLs);
 
 try {
   db = await openScopeDB();
