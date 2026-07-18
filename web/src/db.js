@@ -98,6 +98,7 @@ export async function readScopeState(db) {
 export async function applyImportPlan(db, plan, receiptFiles, mode) {
   const transaction = db.transaction(STORE_NAMES, "readwrite");
   const done = transactionDone(transaction);
+  const receiptFileIDs = new Set(receiptFiles.map(file => file.id));
 
   try {
     if (mode === "replace") {
@@ -107,7 +108,10 @@ export async function applyImportPlan(db, plan, receiptFiles, mode) {
     for (const name of STORE_NAMES) {
       const records = plan[name] || [];
       const store = transaction.objectStore(name);
-      for (const record of records) store.put(record);
+      for (const record of records) {
+        if (name === "receipts" && receiptFileIDs.has(record.id)) continue;
+        store.put(record);
+      }
     }
 
     const receiptStore = transaction.objectStore("receipts");
@@ -161,4 +165,3 @@ export async function seedScope(db) {
 export function activeTransactions(transactions) {
   return transactions.filter(transaction => transaction.status !== "deleted");
 }
-
