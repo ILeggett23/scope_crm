@@ -1,4 +1,4 @@
-import { applyImportPlan } from "./db.js";
+import { applyImportPlan } from "./db.js?v=20260717-7";
 
 export const BACKUP_SCHEMA_VERSION = 1;
 const CRC_CHUNK_SIZE = 256 * 1024;
