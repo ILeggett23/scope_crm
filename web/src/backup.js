@@ -59,6 +59,24 @@ async function crc32Async(bytes, options = {}) {
   return (crc ^ 0xffffffff) >>> 0;
 }
 
+async function crc32Blob(blob, options = {}) {
+  const chunkSize = Math.max(16 * 1024, Number(options.chunkSize) || CRC_CHUNK_SIZE);
+  const yieldControl = options.yieldControl || (() => new Promise(resolve => setTimeout(resolve, 0)));
+  const shouldCancel = options.shouldCancel || (() => false);
+  let crc = 0xffffffff;
+
+  for (let offset = 0; offset < blob.size; offset += chunkSize) {
+    if (shouldCancel()) throw new DOMException("Backup reading was cancelled.", "AbortError");
+    const end = Math.min(blob.size, offset + chunkSize);
+    const bytes = new Uint8Array(await blob.slice(offset, end).arrayBuffer());
+    for (let index = 0; index < bytes.length; index += 1) {
+      crc = (crc >>> 8) ^ crcTable[(crc ^ bytes[index]) & 0xff];
+    }
+    if (end < blob.size) await yieldControl();
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
 export function isSafeArchivePath(path) {
   return Boolean(path) &&
     !path.startsWith("/") &&
@@ -138,6 +156,51 @@ export async function decodeStoredZipAsync(buffer, options = {}) {
     entries.set(path, content);
     offset = contentEnd;
     if (offset < bytes.length) await (options.yieldControl || (() => Promise.resolve()))();
+  }
+
+  if (!entries.size) throw new Error("The selected file is not a valid Scope backup.");
+  return entries;
+}
+
+export async function decodeStoredZipFile(file, options = {}) {
+  if (!(file instanceof Blob)) throw new Error("The selected backup file could not be read.");
+  const entries = new Map();
+  const decoder = new TextDecoder();
+  const yieldControl = options.yieldControl || (() => Promise.resolve());
+  let offset = 0;
+
+  while (offset + 4 <= file.size) {
+    if (options.shouldCancel?.()) throw new DOMException("Backup reading was cancelled.", "AbortError");
+    const headerBytes = new Uint8Array(await file.slice(offset, Math.min(file.size, offset + 30)).arrayBuffer());
+    const view = new DataView(headerBytes.buffer, headerBytes.byteOffset, headerBytes.byteLength);
+    const signature = readU32(view, 0);
+    if (signature === 0x02014b50 || signature === 0x06054b50) break;
+    if (signature !== 0x04034b50 || headerBytes.length < 30) throw new Error("Malformed ZIP archive.");
+
+    const flags = readU16(view, 6);
+    const compression = readU16(view, 8);
+    const expectedCRC = readU32(view, 14);
+    const size = readU32(view, 18);
+    const nameLength = readU16(view, 26);
+    const extraLength = readU16(view, 28);
+    if (flags !== 0 || compression !== 0) throw new Error("This backup uses an unsupported ZIP compression method.");
+
+    const nameStart = offset + 30;
+    const nameEnd = nameStart + nameLength;
+    const contentStart = nameEnd + extraLength;
+    const contentEnd = contentStart + size;
+    if (contentEnd > file.size) throw new Error("Malformed ZIP archive.");
+
+    const nameBytes = new Uint8Array(await file.slice(nameStart, nameEnd).arrayBuffer());
+    const path = decoder.decode(nameBytes);
+    if (!isSafeArchivePath(path)) throw new Error(`Unsafe backup path: ${path}`);
+    const content = file.slice(contentStart, contentEnd);
+    if (await crc32Blob(content, options) !== expectedCRC) {
+      throw new Error(`Backup file failed integrity validation: ${path}`);
+    }
+    entries.set(path, content);
+    offset = contentEnd;
+    if (offset < file.size) await yieldControl();
   }
 
   if (!entries.size) throw new Error("The selected file is not a valid Scope backup.");
@@ -233,6 +296,81 @@ export function encodeStoredZip(entries) {
   return output.finish();
 }
 
+function storedLocalHeader(nameLength, dataLength, crc) {
+  const output = new ByteWriter();
+  output.u32(0x04034b50);
+  output.u16(20);
+  output.u16(0);
+  output.u16(0);
+  output.u16(0);
+  output.u16(0);
+  output.u32(crc);
+  output.u32(dataLength);
+  output.u32(dataLength);
+  output.u16(nameLength);
+  output.u16(0);
+  return output.finish();
+}
+
+function storedCentralHeader(nameLength, dataLength, crc, offset) {
+  const output = new ByteWriter();
+  output.u32(0x02014b50);
+  output.u16(20);
+  output.u16(20);
+  output.u16(0);
+  output.u16(0);
+  output.u16(0);
+  output.u16(0);
+  output.u32(crc);
+  output.u32(dataLength);
+  output.u32(dataLength);
+  output.u16(nameLength);
+  output.u16(0);
+  output.u16(0);
+  output.u16(0);
+  output.u16(0);
+  output.u32(0);
+  output.u32(offset);
+  return output.finish();
+}
+
+export async function encodeStoredZipBlob(entries, options = {}) {
+  const parts = [];
+  const central = [];
+  const encoder = new TextEncoder();
+  let offset = 0;
+
+  for (const entry of entries) {
+    if (!isSafeArchivePath(entry.path)) throw new Error(`Unsafe backup path: ${entry.path}`);
+    const name = encoder.encode(entry.path);
+    const data = entry.data instanceof Blob ? entry.data : new Blob([entry.data]);
+    const crc = await crc32Blob(data, options);
+    const header = storedLocalHeader(name.length, data.size, crc);
+    parts.push(header, name, data);
+    central.push({ name, dataLength: data.size, crc, offset });
+    offset += header.length + name.length + data.size;
+    await (options.yieldControl || (() => Promise.resolve()))();
+  }
+
+  const centralWriter = new ByteWriter();
+  for (const entry of central) {
+    centralWriter.push(storedCentralHeader(entry.name.length, entry.dataLength, entry.crc, entry.offset));
+    centralWriter.push(entry.name);
+  }
+  const centralBytes = centralWriter.finish();
+  const end = new ByteWriter();
+  end.u32(0x06054b50);
+  end.u16(0);
+  end.u16(0);
+  end.u16(central.length);
+  end.u16(central.length);
+  end.u32(centralBytes.length);
+  end.u32(offset);
+  end.u16(0);
+  parts.push(centralBytes, end.finish());
+  return new Blob(parts, { type: "application/zip" });
+}
+
 export function validateManifest(input) {
   if (!input || typeof input !== "object") throw new Error("manifest.json is not valid JSON.");
   if (input.schemaVersion !== BACKUP_SCHEMA_VERSION) {
@@ -299,9 +437,20 @@ function parseManifest(entries) {
   return validateManifest(parsed);
 }
 
-export function previewArchive(buffer, currentState = {}) {
-  const entries = decodeStoredZip(buffer);
-  const manifest = parseManifest(entries);
+async function parseManifestAsync(entries) {
+  const data = entries.get("manifest.json");
+  if (!data) throw new Error("The backup does not contain manifest.json.");
+  const bytes = data instanceof Blob ? new Uint8Array(await data.arrayBuffer()) : data;
+  let parsed;
+  try {
+    parsed = JSON.parse(new TextDecoder().decode(bytes));
+  } catch {
+    throw new Error("manifest.json is not valid JSON.");
+  }
+  return validateManifest(parsed);
+}
+
+function buildPreview(manifest, entries, currentState = {}) {
   const currentIDs = new Set((currentState.transactions || []).map(item => item.id));
   const currentFingerprints = new Set((currentState.transactions || [])
     .filter(item => item.status !== "deleted" && item.transactionFingerprint)
@@ -329,34 +478,22 @@ export function previewArchive(buffer, currentState = {}) {
   };
 }
 
+export function previewArchive(buffer, currentState = {}) {
+  const entries = decodeStoredZip(buffer);
+  const manifest = parseManifest(entries);
+  return buildPreview(manifest, entries, currentState);
+}
+
 export async function previewArchiveAsync(buffer, currentState = {}, options = {}) {
   const entries = await decodeStoredZipAsync(buffer, options);
-  const manifest = parseManifest(entries);
-  const currentIDs = new Set((currentState.transactions || []).map(item => item.id));
-  const currentFingerprints = new Set((currentState.transactions || [])
-    .filter(item => item.status !== "deleted" && item.transactionFingerprint)
-    .map(item => item.transactionFingerprint));
+  const manifest = await parseManifestAsync(entries);
+  return buildPreview(manifest, entries, currentState);
+}
 
-  let duplicateIDs = 0;
-  let duplicateFingerprints = 0;
-  for (const transaction of manifest.transactions) {
-    if (currentIDs.has(transaction.id)) duplicateIDs += 1;
-    else if (transaction.status !== "deleted" && transaction.transactionFingerprint && currentFingerprints.has(transaction.transactionFingerprint)) {
-      duplicateFingerprints += 1;
-    }
-  }
-  const missingReceipts = manifest.transactions
-    .filter(transaction => transaction.receiptImagePath && !entries.has(transaction.receiptImagePath))
-    .map(transaction => transaction.receiptImagePath);
-
-  return {
-    manifest,
-    entries,
-    duplicateIDs,
-    duplicateFingerprints,
-    missingReceipts,
-    warnings: [...manifest.warnings, ...missingReceipts.map(path => `Missing receipt file: ${path}`)]
-  };
+export async function previewArchiveFile(file, currentState = {}, options = {}) {
+  const entries = await decodeStoredZipFile(file, options);
+  const manifest = await parseManifestAsync(entries);
+  return buildPreview(manifest, entries, currentState);
 }
 
 export function buildImportPlan(preview, currentState = {}, mode = "merge") {
@@ -397,22 +534,39 @@ export function buildImportPlan(preview, currentState = {}, mode = "merge") {
 export async function restorePortableBackup(db, preview, currentState, mode) {
   const plan = buildImportPlan(preview, currentState, mode);
   const receiptMetadata = new Map(preview.manifest.receipts.map(receipt => [receipt.relativePath, receipt]));
+  const eligibleTransactionIDs = new Set([
+    ...plan.transactions.map(transaction => transaction.id),
+    ...(mode === "merge" ? (currentState.transactions || []).map(transaction => transaction.id) : [])
+  ]);
+  const existingMissingReceiptIDs = new Set((currentState.receipts || [])
+    .filter(receipt => !receipt.blob)
+    .map(receipt => receipt.id));
+  plan.receipts = plan.receipts.filter(receipt => eligibleTransactionIDs.has(receipt.transactionID));
+  const restorableReceiptIDs = new Set([
+    ...plan.receipts.map(receipt => receipt.id),
+    ...existingMissingReceiptIDs
+  ]);
   const receiptFiles = [];
 
-  for (const [path, bytes] of preview.entries) {
+  for (const [path, content] of preview.entries) {
     if (!path.startsWith("receipts/")) continue;
     const metadata = receiptMetadata.get(path);
     const transactionID = path.split("/")[1];
+    const receiptID = metadata?.id || `file:${path}`;
+    if (!eligibleTransactionIDs.has(metadata?.transactionID || transactionID) || !restorableReceiptIDs.has(receiptID)) continue;
+    const blob = content instanceof Blob
+      ? content.slice(0, content.size, metadata?.mimeType || "application/octet-stream")
+      : new Blob([content], { type: metadata?.mimeType || "application/octet-stream" });
     receiptFiles.push({
-      id: metadata?.id || `file:${path}`,
+      id: receiptID,
       transactionID: metadata?.transactionID || transactionID,
       fileName: metadata?.fileName || path.split("/").at(-1),
       note: metadata?.note || "",
       addedAt: metadata?.addedAt || new Date().toISOString(),
       relativePath: path,
-      byteCount: bytes.length,
+      byteCount: blob.size,
       isMissing: false,
-      blob: new Blob([bytes])
+      blob
     });
   }
 
@@ -425,16 +579,12 @@ export async function restorePortableBackup(db, preview, currentState, mode) {
   };
 }
 
-export async function createPortableBackup(state, appVersion = "web-1.0.0") {
-  const receiptEntries = [];
+function buildPortableManifest(state, appVersion) {
   const receipts = [];
   for (const receipt of state.receipts || []) {
     const copy = { ...receipt };
     delete copy.blob;
     receipts.push(copy);
-    if (receipt.blob && receipt.relativePath) {
-      receiptEntries.push({ path: receipt.relativePath, data: new Uint8Array(await receipt.blob.arrayBuffer()) });
-    }
   }
 
   const settings = (state.settings || []).find(item => item.key === "profile") || {
@@ -444,7 +594,7 @@ export async function createPortableBackup(state, appVersion = "web-1.0.0") {
     dailyReminderEnabled: false,
     weeklyReminderEnabled: false
   };
-  const manifest = {
+  return {
     schemaVersion: BACKUP_SCHEMA_VERSION,
     appVersion,
     exportedAt: new Date().toISOString(),
@@ -459,8 +609,27 @@ export async function createPortableBackup(state, appVersion = "web-1.0.0") {
     ...Object.fromEntries(collections.map(name => [name, name === "receipts" ? receipts : (state[name] || [])])),
     warnings: []
   };
+}
+
+export async function createPortableBackup(state, appVersion = "web-1.0.0") {
+  const receiptEntries = [];
+  for (const receipt of state.receipts || []) {
+    if (receipt.blob && receipt.relativePath) {
+      receiptEntries.push({ path: receipt.relativePath, data: new Uint8Array(await receipt.blob.arrayBuffer()) });
+    }
+  }
+  const manifest = buildPortableManifest(state, appVersion);
   const manifestBytes = new TextEncoder().encode(JSON.stringify(manifest, null, 2));
   return encodeStoredZip([{ path: "manifest.json", data: manifestBytes }, ...receiptEntries]);
+}
+
+export async function createPortableBackupBlob(state, appVersion = "web-1.0.0", options = {}) {
+  const manifest = buildPortableManifest(state, appVersion);
+  const manifestBytes = new TextEncoder().encode(JSON.stringify(manifest, null, 2));
+  const receiptEntries = (state.receipts || [])
+    .filter(receipt => receipt.blob && receipt.relativePath)
+    .map(receipt => ({ path: receipt.relativePath, data: receipt.blob }));
+  return encodeStoredZipBlob([{ path: "manifest.json", data: manifestBytes }, ...receiptEntries], options);
 }
 
 
