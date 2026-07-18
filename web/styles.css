@@ -364,7 +364,7 @@ textarea { min-height: 94px; resize: vertical; }
   :root { --screen-padding: 16px; }
   html, body, .app-shell { height: 100dvh; overflow: hidden; }
   .sidebar { display: none; }
-  .main { height: calc(100dvh - var(--mobile-nav-height) - var(--mobile-nav-gap) - 16px); margin-left: 0; padding-bottom: 0; overflow-x: clip; overflow-y: auto; overscroll-behavior-y: contain; scroll-padding-bottom: 34px; }
+  .main { min-height: 0; height: calc(100dvh - var(--mobile-nav-height) - var(--mobile-nav-gap) - 16px); margin-left: 0; padding-bottom: 0; overflow-x: clip; overflow-y: auto; overscroll-behavior-y: contain; scroll-padding-bottom: 34px; }
   body.overlay-open .main { overflow: hidden; }
   .topbar { width: 100%; min-height: calc(71px + env(safe-area-inset-top)); padding: max(15px, env(safe-area-inset-top)) 16px 12px; border-bottom: 0; background: var(--bg-top); box-shadow: none; }
   .topbar.is-scrolled { box-shadow: 0 8px 24px rgba(31, 54, 45, .07); }
