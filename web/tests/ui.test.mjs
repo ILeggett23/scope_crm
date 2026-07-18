@@ -102,7 +102,11 @@ test("mobile transaction sheet and safe areas stay unobstructed", async () => {
 });
 
 test("backup parsing stays cancellable and cannot strand navigation", async () => {
-  const app = await readFile(new URL("../src/app.js", import.meta.url), "utf8");
+  const [app, db, backup] = await Promise.all([
+    readFile(new URL("../src/app.js", import.meta.url), "utf8"),
+    readFile(new URL("../src/db.js", import.meta.url), "utf8"),
+    readFile(new URL("../src/backup.js", import.meta.url), "utf8")
+  ]);
 
   assert.match(app, /previewArchiveFile/);
   assert.doesNotMatch(app, /file\.arrayBuffer\(\)/);
@@ -113,7 +117,16 @@ test("backup parsing stays cancellable and cannot strand navigation", async () =
   assert.match(app, /shouldCancel:\s*\(\) => readGeneration !== backupReadGeneration \|\| currentView !== "import"/);
   assert.match(app, /error\?\.name === "AbortError"/);
   assert.match(app, /preview\.entries\.clear\(\)/);
+  assert.match(app, /migrateReceiptStorage\(db, yieldToBrowser\)/);
+  assert.match(app, /IntersectionObserver/);
+  assert.match(app, /loadReceiptBlob:\s*receipt => getReceiptBlob\(db, receipt\)/);
   assert.match(app, /This section could not display one of its restored records/);
+  assert.match(db, /DB_VERSION = 2/);
+  assert.match(db, /receiptFiles:\s*\{ keyPath: "storageKey" \}/);
+  assert.match(db, /migrateReceiptStorage/);
+  assert.match(db, /getAllKeys\(db, "receipts"\)/);
+  assert.match(db, /for \(const file of receiptFiles\)/);
+  assert.match(backup, /delete copy\.storageKey/);
 });
 
 test("assistant UI and response code are fully removed", async () => {
