@@ -44,7 +44,6 @@
           <h1 id="view-title">Scope</h1>
         </div>
         <div class="topbar-actions">
-          <button class="icon-button assistant-button" id="assistant-button" aria-label="Open Scope Assistant" title="Scope Assistant"><svg class="icon"><use href="assets/icons.svg#icon-sparkles"></use></svg></button>
           <button class="primary-button" id="quick-add-button"><svg class="icon"><use href="assets/icons.svg#icon-plus"></use></svg><span>Add transaction</span></button>
         </div>
       </header>
@@ -62,25 +61,6 @@
 
   <div id="modal-root"></div>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
-
-  <aside id="assistant-drawer" class="assistant-drawer" aria-label="Scope Assistant" aria-hidden="true">
-    <header>
-      <div>
-        <p class="eyebrow">Local budgeting guidance</p>
-        <h2>Scope Assistant</h2>
-      </div>
-      <button class="icon-button" id="close-assistant" aria-label="Close assistant"><svg class="icon"><use href="assets/icons.svg#icon-x"></use></svg></button>
-    </header>
-    <div id="assistant-messages" class="assistant-messages"></div>
-    <div id="assistant-suggestions" class="suggestions"></div>
-    <form id="assistant-form" class="assistant-input">
-      <label class="sr-only" for="assistant-question">Ask about your money</label>
-      <input id="assistant-question" autocomplete="off" placeholder="Can I spend $80 on dinner?">
-      <button class="primary-button send-button" type="submit" aria-label="Send question"><svg class="icon"><use href="assets/icons.svg#icon-send"></use></svg></button>
-    </form>
-    <p class="assistant-disclaimer">Budgeting support only, not professional financial advice.</p>
-  </aside>
-  <div id="drawer-backdrop" class="drawer-backdrop" hidden></div>
 
   <div id="image-viewer" class="image-viewer" hidden role="dialog" aria-modal="true" aria-label="Receipt preview">
     <button id="close-image-viewer" class="viewer-close" aria-label="Close receipt preview"><svg class="icon"><use href="assets/icons.svg#icon-x"></use></svg></button>
