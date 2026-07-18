@@ -7,7 +7,7 @@ import {
   applyImportPlan,
   activeTransactions
 } from "./db.js";
-import { calculateSnapshot, money, assistantAnswer } from "./finance.js";
+import { calculateSnapshot, money } from "./finance.js";
 import {
   createPortableBackup,
   previewArchive,
@@ -25,10 +25,6 @@ const title = document.querySelector("#view-title");
 const eyebrow = document.querySelector("#view-eyebrow");
 const modalRoot = document.querySelector("#modal-root");
 const toast = document.querySelector("#toast");
-const assistantDrawer = document.querySelector("#assistant-drawer");
-const drawerBackdrop = document.querySelector("#drawer-backdrop");
-const assistantMessages = document.querySelector("#assistant-messages");
-const assistantSuggestions = document.querySelector("#assistant-suggestions");
 const imageViewer = document.querySelector("#image-viewer");
 const viewerImage = document.querySelector("#viewer-image");
 
@@ -40,9 +36,7 @@ let currentBackupPreview = null;
 let receiptURLCache = new Map();
 let toastTimer;
 let modalReturnFocus = null;
-let assistantReturnFocus = null;
 let imageViewerReturnFocus = null;
-let assistantBusy = false;
 
 const viewMeta = {
   dashboard: ["Scope", "Financial overview"],
@@ -96,7 +90,6 @@ function showToast(message) {
 
 function syncOverlayState() {
   const hasOverlay = Boolean(modalRoot.firstElementChild)
-    || assistantDrawer.classList.contains("is-open")
     || !imageViewer.hidden;
   document.body.classList.toggle("overlay-open", hasOverlay);
 }
@@ -206,7 +199,7 @@ function renderDashboard() {
       <span>Personal and business money, clearly organized.</span>
     </div>
     <div class="dashboard-grid">
-      <article class="card hero-card span-8">
+      <article class="card hero-card span-12">
         <div class="hero-heading">
           <div>
             <p class="metric-label">Net cash flow</p>
@@ -223,12 +216,6 @@ function renderDashboard() {
           <div><span>Flexible after bills</span><strong>${money(snapshot.flexibleMoneyAfterBills)}</strong></div>
           <div><span>Upcoming bills</span><strong>${money(snapshot.upcomingBillsTotal)}</strong></div>
         </div>
-      </article>
-
-      <article class="card assistant-shortcut span-4">
-        <span class="section-icon assistant">${icon("sparkles")}</span>
-        <div><h2>Scope Assistant</h2><p>Ask about spending, budgets, bills, or a purchase.</p></div>
-        <button class="primary-button full-button" type="button" data-action="open-assistant">${icon("sparkles")} Ask Assistant</button>
       </article>
 
       <article class="card span-6">
@@ -336,8 +323,8 @@ function renderBudget() {
   const snapshot = calculateSnapshot(state);
   const rows = snapshot.budgetRows.sort((a, b) => b.percent - a.percent);
   return `<div class="page-stack">
-    <div class="section-toolbar action-toolbar">
-      <div><h2>Monthly budgets</h2><p class="row-meta">${money(snapshot.expenses)} spent · ${money(snapshot.remainingBudget)} remaining</p></div>
+    <div class="section-toolbar action-toolbar budget-toolbar">
+      <div class="budget-summary"><h2>Monthly budgets</h2><p class="row-meta">${money(snapshot.expenses)} spent · ${money(snapshot.remainingBudget)} remaining</p></div>
       <button class="primary-button" data-action="add-budget">${icon("plus")} Add budget</button>
     </div>
     <div class="dashboard-grid">
@@ -349,7 +336,7 @@ function renderBudget() {
           <div class="progress-row"><div class="progress-track"><div class="progress-fill ${percent > 100 ? "over" : percent >= 80 ? "warning" : ""}" style="width:${Math.min(100, Math.max(0, percent))}%"></div></div></div>
           <span class="badge ${percent > 100 ? "danger" : percent >= 80 ? "warning" : "good"}">${percent > 100 ? "Over budget" : percent >= 80 ? "Near limit" : "On track"}</span>
         </article>`;
-      }).join("") : `<div class="span-12">${emptyState("◔", "No budgets yet", "Add a category budget to make spending limits visible.", '<br><button class="primary-button" data-action="add-budget">Add budget</button>')}</div>`}
+      }).join("") : `<div class="span-12">${emptyState("◔", "No budgets yet", "Add a category budget to make spending limits visible.")}</div>`}
     </div>
   </div>`;
 }
@@ -495,8 +482,8 @@ function renderSettings() {
       <div class="list">${state.categories.map(category => `<div class="list-row"><div class="row-main"><p class="row-title">${escapeHTML(category.name)}</p><p class="row-meta">${category.isIncomeCategory ? "Income" : "Expense"} category</p></div><button class="icon-button danger-icon" data-delete-category="${category.id}" aria-label="Delete ${escapeHTML(category.name)}">${icon("trash")}</button></div>`).join("")}</div>
     </article>
     <article class="card span-5">
-      <div class="card-header"><div><h2>Savings goals</h2><p>Included in assistant calculations</p></div><button class="secondary-button" data-action="add-goal">${icon("plus")} Add</button></div>
-      ${state.savingsGoals.length ? state.savingsGoals.map(goal => `<div class="list-row"><div class="row-main"><p class="row-title">${escapeHTML(goal.name)}</p><p class="row-meta">${money(goal.savedAmount)} saved of ${money(goal.targetAmount)}</p></div><button class="icon-button danger-icon" data-delete-goal="${goal.id}" aria-label="Delete goal">${icon("trash")}</button></div>`).join("") : emptyState("◇", "No savings goals", "Add a target for better affordability guidance.")}
+      <div class="card-header"><div><h2>Savings goals</h2><p>Track progress toward your priorities</p></div><button class="secondary-button" data-action="add-goal">${icon("plus")} Add</button></div>
+      ${state.savingsGoals.length ? state.savingsGoals.map(goal => `<div class="list-row"><div class="row-main"><p class="row-title">${escapeHTML(goal.name)}</p><p class="row-meta">${money(goal.savedAmount)} saved of ${money(goal.targetAmount)}</p></div><button class="icon-button danger-icon" data-delete-goal="${goal.id}" aria-label="Delete goal">${icon("trash")}</button></div>`).join("") : emptyState("◇", "No savings goals", "Add a target to track your progress.")}
     </article>
     <div class="span-12 callout">Scope stores web data in IndexedDB on this device. Clearing browser site data removes it, so create portable backups regularly.</div>
   </div>`;
@@ -579,7 +566,6 @@ function bindReceiptPreviewEvents() {
 
 function handleAction(action) {
   switch (action) {
-    case "open-assistant": return openAssistant();
     case "add-transaction": return openTransactionModal();
     case "add-budget": return openBudgetModal();
     case "add-event": return openEventModal();
@@ -1027,51 +1013,6 @@ async function exportBackup(filename = null, notify = true) {
   }
 }
 
-function openAssistant() {
-  assistantReturnFocus = document.activeElement;
-  assistantDrawer.classList.add("is-open");
-  assistantDrawer.setAttribute("aria-hidden", "false");
-  drawerBackdrop.hidden = false;
-  syncOverlayState();
-  document.querySelector("#assistant-question").focus();
-}
-
-function closeAssistant() {
-  assistantDrawer.classList.remove("is-open");
-  assistantDrawer.classList.remove("is-dragging");
-  assistantDrawer.style.removeProperty("--drawer-drag");
-  assistantDrawer.setAttribute("aria-hidden", "true");
-  drawerBackdrop.hidden = true;
-  syncOverlayState();
-  if (assistantReturnFocus?.isConnected) assistantReturnFocus.focus();
-  assistantReturnFocus = null;
-}
-
-function addAssistantMessage(text, role) {
-  const message = document.createElement("div");
-  message.className = `message ${role}`;
-  message.textContent = text;
-  assistantMessages.append(message);
-  assistantMessages.scrollTop = assistantMessages.scrollHeight;
-  return message;
-}
-
-function submitAssistantQuestion(question) {
-  const cleanQuestion = question.trim();
-  if (!cleanQuestion || assistantBusy) return;
-  assistantBusy = true;
-  addAssistantMessage(cleanQuestion, "user");
-  const typing = addAssistantMessage("Thinking with your latest Scope data...", "assistant typing");
-  const sendButton = document.querySelector("#assistant-form button[type='submit']");
-  if (sendButton) sendButton.disabled = true;
-  window.setTimeout(() => {
-    typing.remove();
-    addAssistantMessage(assistantAnswer(cleanQuestion, state), "assistant");
-    assistantBusy = false;
-    if (sendButton) sendButton.disabled = false;
-  }, 140);
-}
-
 function openImageViewer(url, alt) {
   imageViewerReturnFocus = document.activeElement;
   viewerImage.src = url;
@@ -1096,50 +1037,6 @@ function closeImageViewer() {
 document.querySelectorAll("[data-view]").forEach(button => button.addEventListener("click", () => setView(button.dataset.view)));
 document.querySelector("#mobile-more-button").addEventListener("click", openMoreMenu);
 document.querySelector("#quick-add-button").addEventListener("click", () => openTransactionModal());
-document.querySelector("#assistant-button").addEventListener("click", openAssistant);
-document.querySelector("#close-assistant").addEventListener("click", closeAssistant);
-drawerBackdrop.addEventListener("click", closeAssistant);
-const assistantHeader = assistantDrawer.querySelector("header");
-let assistantDragStart = null;
-assistantHeader.addEventListener("pointerdown", event => {
-  if (window.innerWidth > 720 || event.target.closest("button")) return;
-  assistantDragStart = event.clientY;
-  assistantHeader.setPointerCapture(event.pointerId);
-  assistantDrawer.classList.add("is-dragging");
-});
-assistantHeader.addEventListener("pointermove", event => {
-  if (assistantDragStart == null) return;
-  const distance = Math.max(0, event.clientY - assistantDragStart);
-  assistantDrawer.style.setProperty("--drawer-drag", `${distance}px`);
-});
-assistantHeader.addEventListener("pointerup", event => {
-  if (assistantDragStart == null) return;
-  const distance = Math.max(0, event.clientY - assistantDragStart);
-  assistantDragStart = null;
-  assistantDrawer.classList.remove("is-dragging");
-  if (distance > 88) closeAssistant();
-  else assistantDrawer.style.removeProperty("--drawer-drag");
-});
-assistantHeader.addEventListener("pointercancel", () => {
-  assistantDragStart = null;
-  assistantDrawer.classList.remove("is-dragging");
-  assistantDrawer.style.removeProperty("--drawer-drag");
-});
-document.querySelector("#assistant-form").addEventListener("submit", event => {
-  event.preventDefault();
-  const input = document.querySelector("#assistant-question");
-  const question = input.value.trim();
-  if (!question) return;
-  input.value = "";
-  submitAssistantQuestion(question);
-});
-const prompts = ["How am I doing this month?", "Can I spend $80 on dinner?", "What bills are coming up?", "Where can I cut back?"];
-assistantSuggestions.innerHTML = prompts.map(prompt => `<button class="suggestion" type="button">${escapeHTML(prompt)}</button>`).join("");
-assistantSuggestions.querySelectorAll("button").forEach((button, index) => button.addEventListener("click", () => {
-  submitAssistantQuestion(prompts[index]);
-}));
-addAssistantMessage("Ask about spending, budgets, bills, business expenses, or whether a purchase fits your plan. I calculate from the data stored in Scope.", "assistant");
-
 document.querySelector("#close-image-viewer").addEventListener("click", closeImageViewer);
 imageViewer.addEventListener("click", event => {
   if (event.target === imageViewer) closeImageViewer();
@@ -1154,14 +1051,11 @@ document.addEventListener("keydown", event => {
   if (event.key === "Tab") {
     const activeSurface = !imageViewer.hidden
       ? imageViewer
-      : assistantDrawer.classList.contains("is-open")
-        ? assistantDrawer
-        : modalRoot.querySelector(".modal");
+      : modalRoot.querySelector(".modal");
     if (activeSurface) trapFocus(event, activeSurface);
   }
   if (event.key === "Escape") {
     if (!imageViewer.hidden) closeImageViewer();
-    else if (assistantDrawer.classList.contains("is-open")) closeAssistant();
     else closeModal();
   }
 });
