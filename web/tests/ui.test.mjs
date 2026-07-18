@@ -75,6 +75,29 @@ test("mobile UI contract prevents toolbar overflow and duplicate primary actions
   assert.match(css, /\.budget-toolbar\s*\{[^}]*gap:\s*22px/s);
 });
 
+test("mobile transaction sheet and safe areas stay unobstructed", async () => {
+  const [css, app, html] = await Promise.all([
+    readFile(new URL("../styles.css", import.meta.url), "utf8"),
+    readFile(new URL("../src/app.js", import.meta.url), "utf8"),
+    readFile(new URL("../index.html", import.meta.url), "utf8")
+  ]);
+
+  assert.match(html, /theme-color" media="\(prefers-color-scheme: light\)" content="#f7faff"/);
+  assert.match(html, /apple-mobile-web-app-status-bar-style/);
+  assert.match(css, /body\.overlay-open\s*\{[^}]*position:\s*fixed/s);
+  assert.match(css, /\.modal form\s*\{[^}]*overflow:\s*hidden/s);
+  assert.match(css, /\.modal-body\s*\{[^}]*overflow-y:\s*auto/s);
+  assert.match(css, /\.modal-footer\s*\{[^}]*position:\s*static/s);
+  assert.match(css, /\.topbar\s*\{[^}]*border-bottom:\s*0[^}]*background:\s*var\(--bg-top\)/s);
+  assert.match(css, /\.content\s*\{[^}]*padding:[^;]*var\(--mobile-nav-height\)[^;]*var\(--mobile-nav-gap\)/s);
+  assert.match(css, /@media \(max-width:\s*430px\)[\s\S]*\.transaction-toolbar \.filter-row\s*\{[^}]*grid-template-columns:\s*1fr/s);
+  assert.match(app, /scope-summary-card/);
+  assert.match(app, /dashboard-budget-card/);
+  assert.match(app, /class="switch-row"/);
+  assert.match(app, /remove-tx-receipt/);
+  assert.doesNotMatch(css, /\.modal-footer\s*\{[^}]*position:\s*sticky/s);
+});
+
 test("assistant UI and response code are fully removed", async () => {
   const [html, app, finance, css, icons] = await Promise.all([
     readFile(new URL("../index.html", import.meta.url), "utf8"),
