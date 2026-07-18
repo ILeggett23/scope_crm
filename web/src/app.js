@@ -10,13 +10,13 @@ import {
   saveReceiptAttachment,
   deleteReceiptAttachment,
   migrateReceiptStorage
-} from "./db.js";
+} from "./db.js?v=20260717-7";
 import { calculateSnapshot, money } from "./finance.js";
 import {
   createPortableBackupBlob,
   previewArchiveFile,
   restorePortableBackup
-} from "./backup.js?v=20260717-6";
+} from "./backup.js?v=20260717-7";
 import {
   parseFinancialCSV,
   sha256Hex,
