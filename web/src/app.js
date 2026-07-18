@@ -9,10 +9,10 @@ import {
 } from "./db.js";
 import { calculateSnapshot, money } from "./finance.js";
 import {
-  createPortableBackup,
-  previewArchiveAsync,
+  createPortableBackupBlob,
+  previewArchiveFile,
   restorePortableBackup
-} from "./backup.js?v=20260717-4";
+} from "./backup.js?v=20260717-5";
 import {
   parseFinancialCSV,
   sha256Hex,
@@ -36,6 +36,7 @@ let currentView = "dashboard";
 let currentCSVPreview = null;
 let currentBackupPreview = null;
 let backupReadGeneration = 0;
+let restoreInProgress = false;
 let receiptURLCache = new Map();
 let toastTimer;
 let modalReturnFocus = null;
@@ -1019,7 +1020,7 @@ async function handleBackupFile(event) {
     event.target.setAttribute("aria-busy", "true");
     showToast("Reading backup locally...");
     await yieldToBrowser();
-    const preview = await previewArchiveAsync(await file.arrayBuffer(), state, {
+    const preview = await previewArchiveFile(file, state, {
       yieldControl: yieldToBrowser,
       shouldCancel: () => readGeneration !== backupReadGeneration || currentView !== "import"
     });
@@ -1038,7 +1039,7 @@ async function handleBackupFile(event) {
 }
 
 async function restoreBackup(mode) {
-  if (!currentBackupPreview) return;
+  if (!currentBackupPreview || restoreInProgress) return;
   if (mode === "replace") {
     const accepted = confirm("Full Restore will replace this browser's current Scope records. A safety backup will download first. Continue?");
     if (!accepted) return;
@@ -1048,13 +1049,31 @@ async function restoreBackup(mode) {
       return;
     }
   }
+  const restoreButtons = [...document.querySelectorAll('[data-action="restore-merge"], [data-action="restore-replace"]')];
+  restoreInProgress = true;
+  for (const button of restoreButtons) {
+    button.disabled = true;
+    button.setAttribute("aria-busy", "true");
+  }
   try {
-    const result = await restorePortableBackup(db, currentBackupPreview, state, mode);
+    showToast("Restoring backup locally...");
+    await yieldToBrowser();
+    const preview = currentBackupPreview;
+    const result = await restorePortableBackup(db, preview, state, mode);
     currentBackupPreview = null;
+    preview.entries.clear();
+    await yieldToBrowser();
     await reload();
     showToast(`Restored ${result.insertedTransactions} transactions and ${result.restoredReceipts} receipts.`);
   } catch (error) {
     showToast(`Restore rolled back: ${error.message}`);
+  } finally {
+    restoreInProgress = false;
+    for (const button of restoreButtons) {
+      if (!button.isConnected) continue;
+      button.disabled = false;
+      button.removeAttribute("aria-busy");
+    }
   }
 }
 
@@ -1105,8 +1124,8 @@ async function importCSVPreview() {
 async function exportBackup(filename = null, notify = true) {
   try {
     await yieldToBrowser();
-    const bytes = await createPortableBackup(state);
-    const url = URL.createObjectURL(new Blob([bytes], { type: "application/zip" }));
+    const backupBlob = await createPortableBackupBlob(state, "web-1.0.0", { yieldControl: yieldToBrowser });
+    const url = URL.createObjectURL(backupBlob);
     const link = document.createElement("a");
     link.href = url;
     link.download = filename || `Scope-Portable-Backup-${dateInput()}.zip`;
